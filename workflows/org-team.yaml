@@ -1,6 +1,10 @@
 # Rendered by chief/factory.py. The model never writes this file.
 version: 1
 params:
+  machine:
+    type: machine
+    default: [$first]
+    input: advanced
   repo_dir:
     type: string
     label: Chief repo directory (interns work in agents/intern-<name> under it)

@@ -51,13 +51,16 @@ def spec_from_text(text: str, client=None) -> TeamSpec:
         messages=[{"role": "user", "content": f"<data>\n{text}\n</data>"}],
     )
     raw = "".join(b.text for b in r.content if getattr(b, "type", "text") == "text")
-    j = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
-    return TeamSpec(
-        team=str(j["team"]).strip().lower(),
-        people=[{"name": str(p["name"]).strip().lower(), "role": str(p["role"]).strip().lower()} for p in j["people"]],
-        data=bool(j.get("data")),
-        release_cadence=j.get("release_cadence") or None,
-    )
+    try:
+        j = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
+        return TeamSpec(
+            team=str(j["team"]).strip().lower(),
+            people=[{"name": str(p["name"]).strip().lower(), "role": str(p["role"]).strip().lower()} for p in j["people"]],
+            data=bool(j.get("data")),
+            release_cadence=j.get("release_cadence") or None,
+        )
+    except (ValueError, KeyError, TypeError) as e:
+        raise ValueError("could not read the team description") from e
 
 
 def _intern(team: str, p: dict) -> dict:
@@ -66,6 +69,7 @@ def _intern(team: str, p: dict) -> dict:
         "name": f"intern-{n}",
         "display_name": f"intern-{n}",
         "provider": "claude",
+        "machine": "{machine}",
         "directory": f"{{repo_dir}}/agents/intern-{n}",
         "addressing": "owner-agents",
         "auto_mode": False,
@@ -82,7 +86,12 @@ def render(spec: TeamSpec) -> str:
     def room(name, desc):
         return {"name": name, "description": desc, "agents": names, "users": ["{$creator}"]}
 
-    rooms = [room(spec.team, f"The {spec.team} team."), room(f"{spec.team}-eng", f"{spec.team} engineering. {eng_note}".strip())]
+    eng = room(f"{spec.team}-eng", f"{spec.team} engineering. {eng_note}".strip())
+    eng["roles"] = [
+        {"name": "reviewer", "instructions": "Reviews changes before they merge.", "exclusive": False},
+        {"name": "on-call", "instructions": "Takes incoming issues; one holder at a time.", "exclusive": True},
+    ]
+    rooms = [room(spec.team, f"The {spec.team} team."), eng]
 
     def dump(k, v):
         return yaml.safe_dump({k: v}, sort_keys=False).rstrip() if v else ""
@@ -91,20 +100,26 @@ def render(spec: TeamSpec) -> str:
     return out.replace("__AGENTS__", dump("agents", interns)).replace("__ROOMS__", dump("rooms", rooms))
 
 
-def validate(yaml_str: str, existing_rooms=()) -> list[str]:
+def validate(yaml_str: str, existing_rooms=(), existing_agents=()) -> list[str]:
     try:
         doc = yaml.safe_load(yaml_str)
     except yaml.YAMLError as e:
         return [f"invalid yaml: {e}"]
     problems = []
     for r in doc.get("rooms", []):
-        if not NAME_RE.match(r["name"]):
+        if not NAME_RE.fullmatch(r["name"]):
             problems.append(f"bad room name: {r['name']}")
         if r["name"] in existing_rooms:
             problems.append(f"room already exists: {r['name']}")
+    seen = set()
     for a in doc.get("agents", []):
-        if not NAME_RE.match(a["name"]):
+        if not NAME_RE.fullmatch(a["name"]):
             problems.append(f"bad agent name: {a['name']}")
+        if a["name"] in seen:
+            problems.append(f"duplicate agent in spec: {a['name']}")
+        seen.add(a["name"])
+        if a["name"] in existing_agents:
+            problems.append(f"agent already exists: {a['name']}")
     return problems
 
 
@@ -118,20 +133,29 @@ def describe_for_approval(spec: TeamSpec) -> str:
 def build(text: str, client_switch, approved: bool = False, client=None) -> str:
     if not approved:
         return "needs approval"
-    spec = spec_from_text(text, client)
-    bad = [f"bad name: {n}" for n in [spec.team, *(p["name"] for p in spec.people)] if not NAME_RE.match(n)]
+    try:
+        spec = spec_from_text(text, client)
+    except ValueError as e:
+        return f"refused: {e}"
+    bad = [f"bad name: {n}" for n in [spec.team, *(p["name"] for p in spec.people)] if not NAME_RE.fullmatch(n)]
     if bad:
         return "refused: " + "; ".join(bad)
+    try:  # fail closed: no duplicate check, no build
+        rooms = [r["name"] for r in client_switch.op("list_rooms")]
+        agents = [a["name"] for a in client_switch.op("list_agents")]
+    except Exception as e:
+        return f"refused: could not check existing rooms and agents ({e})"
     y = render(spec)
-    existing = getattr(client_switch, "list_rooms", lambda: [])()
-    if problems := validate(y, existing):
+    problems = validate(y, rooms, agents)
+    dirs = [ROOT / "agents" / f"intern-{p['name']}" for p in _devs(spec)]
+    problems += [f"directory exists: {d.name}" for d in dirs if d.exists()]
+    if problems:
         return "refused: " + "; ".join(problems)
-    for p in _devs(spec):
-        d = ROOT / "agents" / f"intern-{p['name']}"
-        d.mkdir(parents=True, exist_ok=True)
+    client_switch.room_from_yaml(y, {"repo_dir": str(ROOT)})
+    for p, d in zip(_devs(spec), dirs):
+        d.mkdir(parents=True)
         (d / "CLAUDE.md").write_text(INTERN_BRIEF.format(name=p["name"], role=p["role"], team=spec.team))
     out = ROOT / "org" / f"{spec.team}.yaml"
     out.parent.mkdir(exist_ok=True)
     out.write_text(y)
-    client_switch.room_from_yaml(y)
-    return f"Created #{spec.team} and #{spec.team}-eng" + "".join(f", {a}" for a in [f"intern-{p['name']}" for p in _devs(spec)]) + "."
+    return f"Created #{spec.team} and #{spec.team}-eng" + "".join(f", intern-{p['name']}" for p in _devs(spec)) + "."

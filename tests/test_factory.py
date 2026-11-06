@@ -21,11 +21,16 @@ class FakeClient:
 
 
 class FakeSwitch:
-    def __init__(self):
-        self.sent = []
+    def __init__(self, rooms=(), agents=(), fail=False):
+        self.sent, self.rooms, self.agents, self.fail = [], rooms, agents, fail
 
-    def room_from_yaml(self, y):
-        self.sent.append(y)
+    def op(self, name):
+        if self.fail:
+            raise RuntimeError("down")
+        return [{"name": n} for n in (self.rooms if name == "list_rooms" else self.agents)]
+
+    def room_from_yaml(self, y, inputs):
+        self.sent.append((y, inputs))
 
 
 def sandbox(tmp_path, monkeypatch):
@@ -68,3 +73,42 @@ def test_build_requires_approval_action(tmp_path, monkeypatch):
     assert len(sw.sent) == 1
     assert "intern-kiran" in (tmp_path / "agents/intern-kiran/CLAUDE.md").read_text()
     assert (tmp_path / "org/growth.yaml").exists()
+
+
+KIRAN = {"team": "growth", "people": [{"name": "kiran", "role": "dev"}], "data": False, "release_cadence": None}
+
+
+def test_rendered_has_machine_and_roles():
+    d = yaml.safe_load(factory.render(SPEC))
+    assert d["params"]["machine"]["default"] == ["$first"]
+    assert d["agents"][0]["machine"] == "{machine}"
+    assert [r["name"] for r in d["rooms"][1]["roles"]] == ["reviewer", "on-call"]
+
+
+def test_build_refuses_existing_agent_dir_and_name(tmp_path, monkeypatch):
+    sandbox(tmp_path, monkeypatch)
+    (tmp_path / "agents/intern-kiran").mkdir(parents=True)
+    sw = FakeSwitch()
+    assert "directory exists" in factory.build("x", sw, approved=True, client=FakeClient(KIRAN))
+    assert "agent already exists" in factory.build("x", FakeSwitch(agents=["intern-kiran"]), approved=True, client=FakeClient(KIRAN))
+    dup = dict(KIRAN, people=KIRAN["people"] * 2)
+    assert "duplicate agent" in factory.build("x", FakeSwitch(), approved=True, client=FakeClient(dup))
+    assert sw.sent == []
+
+
+def test_build_fails_closed_when_lookup_fails(tmp_path, monkeypatch):
+    sandbox(tmp_path, monkeypatch)
+    sw = FakeSwitch(fail=True)
+    assert factory.build("x", sw, approved=True, client=FakeClient(KIRAN)).startswith("refused")
+    assert sw.sent == []
+    assert "room already exists" in factory.build("x", FakeSwitch(rooms=["growth"]), approved=True, client=FakeClient(KIRAN))
+
+
+def test_build_passes_repo_dir_and_bad_json(tmp_path, monkeypatch):
+    sandbox(tmp_path, monkeypatch)
+    sw = FakeSwitch()
+    factory.build("x", sw, approved=True, client=FakeClient(KIRAN))
+    assert sw.sent[0][1] == {"repo_dir": str(tmp_path)}
+    bad = FakeClient(KIRAN)
+    bad.j = "nonsense"
+    assert factory.build("x", FakeSwitch(), approved=True, client=bad).startswith("refused")
