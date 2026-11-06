@@ -182,10 +182,10 @@ def dream_team(store: MemoryStore, client=None, today: date | None = None) -> li
 
 def _git_commit(root: Path, day: str) -> None:
     git = ["git", "-c", "user.name=Chief", "-c", "user.email=chief@localhost"]
-    subprocess.run([*git, "add", "."], cwd=root, check=True)
-    if subprocess.run([*git, "diff", "--cached", "--quiet"], cwd=root).returncode == 0:
-        return  # nothing changed
-    subprocess.run([*git, "commit", "-m", f"memory: dream {day}"], cwd=root, check=True)
+    subprocess.run([*git, "add", "--", "."], cwd=root, check=True)
+    if subprocess.run([*git, "diff", "--cached", "--quiet", "--", "."], cwd=root).returncode == 0:
+        return  # nothing changed in memory
+    subprocess.run([*git, "commit", "-m", f"memory: dream {day}", "--", "."], cwd=root, check=True)
 
 
 def run_nightly(client_switch, store: MemoryStore, rooms: list[str], client=None,
@@ -201,7 +201,11 @@ def run_nightly(client_switch, store: MemoryStore, rooms: list[str], client=None
                 if e["sender_name"] in episodes:
                     episodes[e["sender_name"]].append(f"{room}: {e['body'][:200]}")
         for c in extract(threads, people, client):
-            action, target, text = dedup(c, store.search(c["text"], [c["owner"]]), client)
+            hits = store.search(c["text"], [c["owner"]])
+            similar = [i for i in hits if not i.edited_by_person]  # person edits win
+            if hits and not similar:
+                continue  # only matches the person's own words: skip
+            action, target, text = dedup(c, similar, client)
             if action == "store":
                 store.add("personal", c["owner"], c["kind"], c["text"],
                           {"room": room, "date": str(today), "by": "dreamer"})

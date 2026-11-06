@@ -87,6 +87,39 @@ def test_unused_90_days_archived_without_model(store):
     assert fake.calls == [] and store.items("asha", "archived")[0].id == i
 
 
+def test_nightly_never_supersedes_person_edit(tmp_path):
+    store = MemoryStore(tmp_path / "memory")
+    mine = store.add("personal", "asha", "fact", "Owns Billing queue", {**SRC, "by": "person"})
+
+    class Sw:
+        def context(self, room, limit):
+            return {"threads": THREADS}
+
+        def room_doc(self, *a):
+            pass
+
+    fake = Fake([{"owner": "asha", "kind": "fact", "text": "Owns Billing queue and Refunds", "tierHint": "personal"}])
+    dreamer.run_nightly(Sw(), store, ["#eng"], fake, today=date(2026, 11, 7), commit=lambda *a: None)
+    assert [i.id for i in store.items("asha")] == [mine]
+    assert store.items("asha", "superseded") == []
+    assert len(fake.calls) == 1  # extract only, no dedup call
+
+
+def test_commit_ignores_files_staged_outside_memory(tmp_path):
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory/a.md").write_text("a")
+    (tmp_path / "other.txt").write_text("x")
+
+    def run(*a):
+        return subprocess.run(["git", *a], cwd=tmp_path, capture_output=True, text=True, check=True).stdout
+
+    run("init", "-q")
+    run("add", "other.txt")
+    dreamer._git_commit(tmp_path / "memory", "2026-11-07")
+    assert run("show", "--name-only", "--format=%s", "HEAD").split() == ["memory:", "dream", "2026-11-07", "memory/a.md"]
+    assert run("diff", "--cached", "--name-only").split() == ["other.txt"]
+
+
 def test_run_nightly_end_to_end(tmp_path):
     repo = tmp_path / "repo"
     store = MemoryStore(repo / "memory")
