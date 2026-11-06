@@ -250,6 +250,8 @@ class SwitchClient:
     def assume_role(self, room_id: str, role: str):
         with self._lock:
             self._enter(room_id)
+            # Switch leases one role per agent (any room): the newest work room takes the hat
+            self.op("release_role")
             return self.op("assume_role", role=role)
 
     def context(self, room_id: str, limit: int = 50):

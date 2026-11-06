@@ -178,6 +178,15 @@ def test_connect_registers_once_and_saves_creds(tmp_path, monkeypatch):
     assert calls == [("http://s", "tok", "chief", "desc")]
 
 
+def test_assume_role_releases_previous_lease_first():
+    c, seen = client(STATE)
+    c.assume_role("R", "data-steward")
+    ops = [r.url.path.rsplit("/", 1)[1] for r in seen if "/ops/" in r.url.path and "list_rooms" not in r.url.path]
+    assert ops == ["connect_to_room", "release_role", "assume_role"]
+    assert json.loads(seen[-1].content) == {"role": "data-steward"}
+    c.close()
+
+
 def test_resolve_rooms_exact_then_suffix():
     from types import SimpleNamespace
 
