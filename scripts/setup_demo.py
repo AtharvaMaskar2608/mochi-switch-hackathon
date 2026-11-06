@@ -98,6 +98,15 @@ def chief_rules(gid: str) -> list[dict]:
     return [{**rule, "owner": True, "owner_agents": True}, {**rule, "room_groups": [gid], "users": "*"}]
 
 
+SPECIALISTS_SKIPPED = ("Specialist Claude Code agents need a Switch Console machine; "
+                       "launched Chief + stand-in only (story 1 works).")
+
+
+def needs_machine(error_text: str) -> bool:
+    """The full org failed only because its specialist agents have no machine to run on."""
+    return "machine_unresolved" in error_text or "agents_not_created" in error_text
+
+
 def find_key_id(keys: list[dict], label: str = KEY_LABEL) -> str | None:
     return next((k["id"] for k in keys if k.get("label") == label and k.get("type") == "registration"), None)
 
@@ -265,12 +274,13 @@ class Setup:
             return
         text = (ROOT / "org/brightcart-org.yaml").read_text()
         r = self.gw.post("/gateway/rooms/from-template-document", json=launch_payload(text, ROOT), timeout=300)
-        if r.is_error:
-            print(f"    full org failed (HTTP {r.status_code}: {redact(r.text, self.secrets)[:300]})")
-            print("    the specialist agents need a Switch Console machine; launching Chief's rooms without them")
+        if r.is_error and needs_machine(r.text):
             lite = yaml.safe_dump(lite_org(yaml.safe_load(text)), sort_keys=False)
             self.check(self.gw.post("/gateway/rooms/from-template-document",
                                     json=launch_payload(lite, ROOT), timeout=300), "launch org (no specialists)")
+            print(f"  ! {SPECIALISTS_SKIPPED}")
+        else:
+            self.check(r, "launch org/brightcart-org.yaml")
 
     def addressing(self) -> None:
         gid = group_id(self.get("/gateway/room-groups"))

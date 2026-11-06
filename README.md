@@ -183,7 +183,7 @@ What `scripts/up.sh` does, in order:
    - creates a personal registration key, `chief-hackathon-local`, and saves it to `.local-switch.env`. Agents registered with this key have an owner, and an agent needs an owner to open rooms.
    - creates the Mattermost users `asha`, `ravi`, `meera` and `dev` and the matching Switch users, then links each pair. To link a pair, it claims the identity as that person and posts the one-time `!link-account` code from their Mattermost account. Generated passwords go to `.local-test-users.json` (mode 600).
    - registers `chief` and `standin-data`, and saves their keys to `.chief.json` and `.connector-standin-data.json` (mode 600).
-   - launches `org/brightcart-org.yaml`, filling Chief's slot with the existing `chief`. The specialist agents (`mochi-data`, `ship`, `reviewer`, `sre`, the interns) can't start without a Switch Console machine. If the full launch fails, the script says so. Then it launches the same group, rooms, people, roles and docs with Chief as the only agent. Story 1 doesn't need the specialists.
+   - launches `org/brightcart-org.yaml`, filling Chief's slot with the existing `chief`. The specialist agents (`mochi-data`, `ship`, `reviewer`, `sre`, the interns) can't start without a Switch Console machine. If the full launch fails for that reason (`machine_unresolved` or `agents_not_created`), the script launches the same group, rooms, people, roles and docs with Chief as the only agent, and says so in one line. Story 1 doesn't need the specialists. Any other error stops the script.
    - sets Chief's addressing policy: its owner, plus anyone in a `brightcart` room. A filled slot ignores the template's `anyone_in`, so the script sets this itself.
    - builds the stand-in SQLite database, `sample/brightcart.db`.
 6. It starts `connectors.standin_data` and `chief` in the background (`chief` with `CHIEF_DATA_AGENT=standin-data`), with logs in `.run/`.
@@ -192,7 +192,7 @@ What `scripts/up.sh` does, in order:
    2. Without Jev, Chief offers to open a data-question room. Reply `yes` in its thread.
    3. Open the new `work-data-question-…` channel. Chief's brief is there, followed by `standin-data`'s answer table.
 
-`bash scripts/down.sh` stops chief, standin-data and Switch core. Then it runs `just down`, which keeps the data volumes. The scripts never print a secret. The admin logins stay in Switch's `.env`, and the test users' logins are in `.local-test-users.json`.
+`bash scripts/down.sh` stops chief, standin-data and Switch core. Before it kills anything, it checks that each pidfile still names that process, and it removes a stale pidfile without touching the process. If `up.sh` started Switch's containers, it then runs `just down`, which keeps the data volumes. If Switch was already running, it's left alone. The API keys in `.env` go only to chief and standin-data, never to Switch. The scripts never print a secret. The admin logins stay in Switch's `.env`, and the test users' logins are in `.local-test-users.json`.
 
 On Apple Silicon, Mattermost runs under amd64 emulation, and it crashed once in testing. If that happens, run `bash scripts/up.sh` again.
 

@@ -97,3 +97,10 @@ def test_say_counts_changes_and_dry_run_never_acts(capsys):
     live = FakeSetup(dry=False)
     assert live.say(False, "missing") is True and live.changes == 1
     assert "= exists" in capsys.readouterr().out
+
+
+def test_needs_machine_only_for_the_specialist_errors():
+    assert sd.needs_machine('{"detail": {"code": "machine_unresolved", "resource": "ship"}}')
+    assert sd.needs_machine('{"detail": "agents_not_created: ship, sre"}')
+    assert not sd.needs_machine("Internal Server Error")
+    assert not sd.needs_machine('{"detail": "group brightcart already exists"}')
