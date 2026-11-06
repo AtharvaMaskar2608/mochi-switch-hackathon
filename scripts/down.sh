@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 SWITCH_DIR=${SWITCH_DIR:-$PWD/.switch}
 RUN=$PWD/.run
-. scripts/pids.sh
+. scripts/lib.sh
 
 for name in chief standin-data switch; do
   if ours "$name"; then killtree "$(cat "$RUN/$name.pid")"; rm -f "$RUN/$name.pid"; echo "stopped $name"; fi

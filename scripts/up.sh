@@ -11,7 +11,7 @@ SWITCH_DIR=${SWITCH_DIR:-$ROOT/.switch}
 RUN=$ROOT/.run
 mkdir -p "$RUN"
 
-die() { echo "up.sh: $*" >&2; exit 1; }
+. scripts/lib.sh  # die, wait_for, start, pidfile checks
 for tool in docker just uv node git openssl curl perl; do
   command -v "$tool" >/dev/null || die "missing prerequisite: $tool"
 done
@@ -43,24 +43,6 @@ port() { grep "^$1=" .env | cut -d= -f2; }
 API_PORT=$(port API_HOST_PORT || true); API="http://localhost:${API_PORT:-8000}"
 MM_PORT=$(port MATTERMOST_HOST_PORT || true); MM="http://localhost:${MM_PORT:-8065}"
 
-wait_for() {  # wait_for URL SECONDS WHAT: a dot every 10 s
-  local i
-  for i in $(seq "$2"); do
-    curl -fsS "$1" >/dev/null 2>&1 && { [ "$i" -gt 10 ] && echo; return; }
-    [ $((i % 10)) = 0 ] && printf .
-    sleep 1
-  done
-  echo; die "$3 did not come up at $1 (logs in $RUN)"
-}
-. "$ROOT/scripts/pids.sh"
-start() {  # start NAME CMD...: run in the background, log to .run/NAME.log
-  local name=$1; shift
-  if ours "$name"; then echo "$name already running"; return; fi
-  nohup "$@" > "$RUN/$name.log" 2>&1 &
-  echo $! > "$RUN/$name.pid"
-  echo "started $name (log: .run/$name.log)"
-}
-
 # --- Switch: services, migrations, core ------------------------------------------------
 if curl -fsS "$API/health" >/dev/null 2>&1; then
   echo "Switch is already running at $API"
@@ -70,14 +52,13 @@ else
   just up > "$RUN/switch-up.log" 2>&1 || die "just up failed (see .run/switch-up.log)"
   for i in $(seq 30); do
     just migrate > "$RUN/switch-migrate.log" 2>&1 && break
-    [ "$i" = 30 ] && die "just migrate failed (see .run/switch-migrate.log)"
+    if [ "$i" = 30 ]; then die "just migrate failed (see .run/switch-migrate.log)"; fi
     sleep 2
   done
   start switch just run
   wait_for "$API/health" 600 "Switch core"
 fi
 if ! curl -fsS "$MM/api/v4/system/ping" >/dev/null 2>&1; then  # e.g. Mattermost crashed under emulation
-  touch "$RUN/started-switch"
   just up >> "$RUN/switch-up.log" 2>&1 || die "just up failed (see .run/switch-up.log)"
 fi
 wait_for "$MM/api/v4/system/ping" 300 "Mattermost"
