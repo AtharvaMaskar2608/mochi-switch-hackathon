@@ -25,6 +25,7 @@ def total(items):
     return sum(i["price"] * i["qty"] for i in items)
 PY
   echo "# brightcart-shop" > README.md
+  : > conftest.py   # empty: puts repo root on sys.path so tests can import cart/refunds
   at 7; commit "Initial cart"
 
   cat > refunds.py <<'PY'
