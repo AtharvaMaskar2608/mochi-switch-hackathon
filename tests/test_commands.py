@@ -41,5 +41,15 @@ def test_forget_matches_item_by_overlap():
         def search(self, query, owners, k=5):
             return [Item(id="a", text="Likes dark mode"), Item(id="b", text="Standup is at 10am daily")]
 
-    assert forget_target(Store(), "meera", "the standup time") == "b"
+    assert forget_target(Store(), "meera", "standup 10am") == "b"
     assert forget_target(Store(), "meera", "zzz") is None
+
+
+def test_forget_ignores_stopword_only_overlap():
+    class Store:
+        def search(self, query, owners, k=5):
+            assert owners == ["meera", "team"]
+            return [Item(id="a", text="The standup is at 10am")]
+
+    assert forget_target(Store(), "meera", "forget the is at") is None
+    assert forget_target(Store(), "meera", "the standup") is None  # one real word is not enough

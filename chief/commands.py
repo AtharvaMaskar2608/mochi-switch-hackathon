@@ -28,12 +28,15 @@ def parse(body: str) -> Command | None:
     return None
 
 
+STOPWORDS = {"the", "a", "an", "is", "are", "was", "at", "to", "of", "my", "i", "in", "on", "and", "for", "it", "that", "this", "me", "we", "our", "be"}
+
+
 def _words(s: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", s.lower()))
+    return set(re.findall(r"[a-z0-9]+", s.lower())) - STOPWORDS
 
 
 def forget_target(store, sender_slug: str, text: str) -> str | None:
-    """Id of the sender's memory item sharing the most words with text, else None."""
+    """Id of the sender's (or team's) memory item sharing the most non-stopwords with text; needs >= 2, else None."""
     q = _words(text)
-    best = max(store.search(text, [sender_slug]), key=lambda i: len(q & _words(i.text)), default=None)
-    return best.id if best and q & _words(best.text) else None
+    best = max(store.search(text, [sender_slug, "team"]), key=lambda i: len(q & _words(i.text)), default=None)
+    return best.id if best and len(q & _words(best.text)) >= 2 else None
