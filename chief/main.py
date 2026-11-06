@@ -165,7 +165,8 @@ def handle(msg: Msg, ctx: Ctx) -> list[Action]:
 
 
 TEAMMATE_MUST_ASK = "a teammate needs to ask for that one"
-YES_RE = re.compile(r"(@\S+\s+)*(yes|yeah|yep|sure|ok|okay|go ahead|please do|do it)(\s+please)?[.!]*", re.I)
+YES_RE = re.compile(r"(@\S+\s+)*(yes|yeah|yep|sure|ok|okay|go ahead|please do|do it)"
+                    r"([\s,]+(yes|sure|ok|go ahead|please|do it|thanks))*[\s.!]*", re.I)
 SLUG_RE = re.compile(r"[a-z][a-z0-9-]{0,30}")
 
 

@@ -310,6 +310,15 @@ def test_yes_settles_an_unsure_template_but_never_a_hard_ask_first_one(ctx):
     assert handle(msg("@chief yes", addressed=True), ctx) == [("none", {})]
 
 
+def test_yes_phrasings():
+    from chief.main import YES_RE
+
+    for ok in ("yes", "@chief yes please", "@chief yes, go ahead", "Sure, thanks!", "go ahead."):
+        assert YES_RE.fullmatch(ok), ok
+    for no in ("yes but only for march", "no", "@chief what about yesterday"):
+        assert not YES_RE.fullmatch(no), no
+
+
 def test_profile_slug_sanitized():
     from chief.main import profile_slug
 
