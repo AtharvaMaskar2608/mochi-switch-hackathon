@@ -4,3 +4,4 @@ __pycache__/
 .chief*.json
 *.db
 .pytest_cache/
+.superpowers/
