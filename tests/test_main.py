@@ -383,6 +383,8 @@ def test_done_in_work_room_restyled_to_origin_thread(ctx):
     assert acts == [("post", {"room_id": "R", "body": "styled: refunds were 4.1% in October", "thread_id": "M1"})]
     assert ("restyle", "ravi") in ctx.writer.calls  # in the asker's style
     assert handle(agent("DONE"), ctx) == []  # answered once
+    assert handle(agent("DONE: mine", sender="reviewer"), ctx) == []  # only the lead's DONE counts
+    assert handle(agent("short note\nDONE"), ctx) == []  # DONE must start the message
     acts = handle(agent("DONE: and 3.2% in September"), ctx)  # DONE with its own text
     assert acts[0][1]["body"] == "styled: and 3.2% in September"
 
@@ -408,9 +410,34 @@ def test_three_requests_open_three_work_rooms(ctx):
     assert [k for k, _ in acts] == ["post", "open_work_room", "open_work_room", "open_work_room"]
     assert acts[0][1]["body"] == "On it, 3 jobs: " + "; ".join(parts)
     assert [a["template"] for _, a in acts[1:]] == ["shipped-digest", "data-question", "bug-fix-review"]
-    # unprompted, the summary takes one of the room's 3 slots: it and two parts get through
-    acts = handle(msg(body, sender="asha", room="R2"), ctx)
+
+
+def test_unaddressed_message_with_and_is_not_split(ctx):
+    ctx.writer = FakeWriter(split=["lunch at 1", "bring the deck"])
+    ctx.writer.split_requests = lambda text: pytest.fail("ambient chat must not be split")
+    ctx.gate = gate_of(for_me=0.1, rung="silent")
+    assert handle(msg("ravi, lunch at 1? and bring the deck", sender="asha"), ctx) == [("none", {})]
+    assert len(ctx.gate.calls) == 1  # one gate call per ambient message
+
+
+def test_summary_only_when_two_parts_act(ctx):
+    parts = ["why did refunds jump", "thanks for the deck", "also hi"]
+    tpl = {"why did refunds jump": "data-question"}
+    body = "why did refunds jump, thanks for the deck, also hi"
+
+    def gate(m, *a):
+        return Decision(for_me=0.9, rung="act" if m.body in tpl else "silent", template=tpl.get(m.body),
+                        fits=0.9, urgency=0.3)
+    ctx.gate = gate
+    ctx.writer = FakeWriter(split=parts)
+    acts = handle(msg(body, addressed=True), ctx)
+    assert [k for k, _ in acts] == ["open_work_room"]  # one part acts: just its output, no summary
+    tpl["thanks for the deck"] = "bug-fix-review"
+    acts = handle(msg(body, addressed=True), ctx)
     assert [k for k, _ in acts] == ["post", "open_work_room", "open_work_room"]
+    assert acts[0][1]["body"] == "On it, 2 jobs: why did refunds jump; thanks for the deck"
+    tpl.clear()
+    assert handle(msg(body, addressed=True), ctx) == [("none", {})]  # none act: nothing extra
 
 
 def test_dev_asks_meera_in_focus_held_without_addressing_chief(ctx):
@@ -436,7 +463,7 @@ def test_release_train_dry_run_after_release_owner_approves(ctx):
     assert handle(agent("PASSED: no high findings", sender="security"), ctx) == []
     notes = "@chief release notes for v1.4.2: refunds rounding fix. Touches 3 services and 1 migration."
     acts = handle(agent(notes, sender="ship", addressed=True), ctx)
-    assert [k for k, _ in acts] == ["approval"]
+    assert [k for k, _ in acts] == ["approval", "post"]
     assert (acts[0][1]["action"], acts[0][1]["owner"]) == ("deploy", "meera")
     code = _code(acts, ctx)
     assert "no pending" in handle(msg(f"approve {code}", sender="ravi"), ctx)[0][1]["body"]
@@ -444,6 +471,16 @@ def test_release_train_dry_run_after_release_owner_approves(ctx):
     line = "would deploy v1.4.2 to staging: 3 services, 1 migrations"
     assert out == [("post", {"room_id": "W1", "body": line, "thread_id": None}),
                    ("post", {"room_id": "R", "body": line, "thread_id": "M1"})]  # posts only: nothing runs
+
+
+def test_release_owner_notified_in_origin_room(ctx):
+    _open_room(ctx, "release-train")
+    acts = handle(agent("@chief release notes for v1.4.2", sender="ship", addressed=True), ctx)
+    c = FakeClient()
+    apply(acts, c, ctx)
+    (kind, room, body, names, roles), note = c.log
+    assert (kind, room, names) == ("target", "R", ["meera"]) and "approve " in body  # origin room, targeted
+    assert note == ("post", "W1", "asked meera to approve the deploy in the requesting thread")
 
 
 def test_dry_run_line_fallbacks():

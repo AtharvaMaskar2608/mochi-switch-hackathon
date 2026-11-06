@@ -50,11 +50,11 @@ FOR_ME_NO = 0.3
 URGENT = 0.67
 RELEASE_EVERY_S = 60
 MERGE_RE = re.compile(r"\b(merge|ship it)\b", re.I)
-DONE_RE = re.compile(r"^DONE\b[ \t:.!-]*", re.M)
+DONE_RE = re.compile(r"DONE\b[\s:.!-]*")  # matched at the start of the message only
 TABLE_RE = re.compile(r"^\s*\|.*\|\s*$", re.M)
 LONG_ANSWER = 300  # ponytail: length heuristic for "this reply is the answer"; a lead posting chatter this long reposts
 OFFER_TTL = timedelta(minutes=30)
-# ponytail: only a message with a separator in it pays for a split call
+# ponytail: only an addressed message with a separator in it pays for a split call
 SPLIT_HINT = re.compile(r"[,;?.]\s*\w|\band\b|\balso\b", re.I)
 
 
@@ -198,12 +198,15 @@ def _work_room_reply(msg: Msg, ctx: Ctx) -> list[Action] | None:
     if o["template"] == "release-train":
         if msg.addressed and _norm(msg.sender_name) == "ship":  # release-scribe's notes are in: ask the owner
             notes = "\n".join(filter(None, [o["last"], body]))
-            return [_approval(msg, ctx.release_owner, "deploy", "release-train", notes=notes)]
+            ask = _approval(msg, ctx.release_owner, "deploy", "release-train", notes=notes)
+            # the owner may not be in this private room: ask where the request came from, targeted at them
+            ask[1].update(room_id=o["room_id"], thread_id=o["thread_id"], notify=True)
+            return [ask, _post(msg, f"asked {ctx.release_owner} to approve the deploy in the requesting thread")]
         o["last"] = body
         return None
-    done = DONE_RE.search(body)
-    text = DONE_RE.sub("", body).strip()
     lead = _norm(msg.sender_name) == _norm(o["lead"])
+    done = lead and DONE_RE.match(body)  # only the room's lead ends the work
+    text = body[done.end():].strip() if done else body
     if not done and not (lead and (len(body) >= LONG_ANSWER or TABLE_RE.search(body))):
         o["last"] = body or o["last"]
         return None
@@ -259,14 +262,17 @@ def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
     if not msg.addressed and ctx.ladder.is_quiet(msg.room_id):
         return [("none", {})]  # skip gate/writer calls whose output would be dropped anyway
     parts = [msg.body]
-    if msg.room_id not in ctx.work_rooms and SPLIT_HINT.search(msg.body):
+    # Ruled exception: only an addressed message is split (up to 3 gate calls); ambient chat keeps one call.
+    if msg.addressed and msg.room_id not in ctx.work_rooms and SPLIT_HINT.search(msg.body):
         parts = ctx.writer.split_requests(msg.body)
     if len(parts) == 1:
         return _capped(_decide(msg, slug, ctx), msg, ctx)
-    out = _capped([_post(msg, ctx.writer.sanitize(f"On it, {len(parts)} jobs: " + "; ".join(parts)))], msg, ctx)
-    for part in parts:  # each part: its own gate, ladder and cap slot
-        out += _capped(_decide(replace(msg, body=part), slug, ctx), msg, ctx)
-    return [a for a in out if a[0] != "none"] or [("none", {})]
+    results = [_decide(replace(msg, body=part), slug, ctx) for part in parts]  # each: its own gate and ladder
+    acting = [part for part, acts in zip(parts, results) if any(k in VISIBLE for k, _ in acts)]
+    out = [a for acts in results for a in acts if a[0] != "none"]
+    if len(acting) >= 2:  # the summary only when it says something the replies don't
+        out.insert(0, _post(msg, ctx.writer.sanitize(f"On it, {len(acting)} jobs: " + "; ".join(acting))))
+    return out or [("none", {})]
 
 
 def _capped(acts: list[Action], msg: Msg, ctx: Ctx) -> list[Action]:
@@ -374,8 +380,11 @@ def _apply_one(kind: str, a: dict, client, ctx: Ctx) -> None:
         client.post(a["room_id"], f"opened {name} for this", thread_id=a.get("thread_id"))
     elif kind == "approval":
         code = ctx.approvals.request(a["action"], a["owner"], a)
-        client.post(a["room_id"], f"{a['owner']}: this needs your ok ({a['action']}). "
-                    f"Reply 'approve {code}' or 'deny {code}'.", thread_id=a.get("thread_id"))
+        text = f"{a['owner']}: this needs your ok ({a['action']}). Reply 'approve {code}' or 'deny {code}'."
+        if a.get("notify"):  # targeted, so the owner is notified even outside the room they usually watch
+            client.target(a["room_id"], text, names=[a["owner"]], thread_id=a.get("thread_id"))
+        else:
+            client.post(a["room_id"], text, thread_id=a.get("thread_id"))
     elif kind == "hold":
         ctx.ladder.hold(a["for"], a["item"])  # the item carries its own room
     elif kind == "dream":
