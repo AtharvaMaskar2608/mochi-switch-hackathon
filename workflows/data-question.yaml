@@ -10,11 +10,16 @@ params:
   asker:
     type: user
     label: Asker
+  data_agent:
+    type: agent
+    label: Data agent
+    description: The agent that answers data questions (mochi-data, or standin-data on the judge path).
+    default: mochi-data
 room:
   name: work-data-question-{$timestamp}
   description: A data question for the data-steward.
   channel_type: channel_private
-  agents: [mochi-data, chief]
+  agents: ["{data_agent}", chief]
   users: ["{asker}"]
   roles:
     - name: data-steward
@@ -26,8 +31,8 @@ room:
     {brief}
 
     Steps:
-    1. The data-steward (mochi-data) answers in this thread: one line, a table, the Mochi artifact link, and the query.
+    1. The data-steward ({data_agent}) answers in this thread: one line, a table, the Mochi artifact link, and the query.
     2. The data-steward posts DONE on its own line. That ends the work. It does not @ anyone.
     3. Chief then restyles the answer for {asker} in the thread the question came from.
 kickoff: |
-  @mochi-data take the data-steward role. Read the brief in the room instructions and answer it as your CLAUDE.md says. Post DONE when finished.
+  @{data_agent} take the data-steward role. Read the brief in the room instructions and answer it as your CLAUDE.md says. Post DONE when finished.

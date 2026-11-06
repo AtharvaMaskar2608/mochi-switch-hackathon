@@ -1,6 +1,6 @@
 """Generic connector: an existing agent joins Switch rooms as a teammate."""
-import json
-import os
+import re
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -9,6 +9,7 @@ from pathlib import Path
 from chief.models import Msg
 
 LONG_JOB_S = 20
+TAKE_ROLE = re.compile(r"\btake the ([a-z][a-z0-9-]*) role\b", re.I)
 MAX_ATTACH = 20 * 1024 * 1024
 
 
@@ -62,15 +63,10 @@ def _work(client, msg: Msg, handler: Callable[[Msg], Reply], long_s: float) -> N
 
 
 def _default_client(name: str, roles: list[str]):
-    from chief.switch_client import SwitchClient, register  # lazy: built in Task 2
+    from chief.switch_client import connect
 
-    cache = Path(f".connector-{name}.json")
-    if cache.exists():
-        creds = json.loads(cache.read_text())
-    else:
-        creds = register(os.environ["SWITCH_URL"], os.environ["SWITCH_REGISTRATION_TOKEN"], name, roles)
-        cache.write_text(json.dumps(creds))
-    return SwitchClient(os.environ["SWITCH_URL"], **creds)
+    # roles are hats granted per room by the templates; the description just says which it wears
+    return connect(name, f"{name} connector; roles: {', '.join(roles) or 'none'}", Path(f".connector-{name}.json"))
 
 
 def run_connector(name: str, handler: Callable[[Msg], Reply], roles: list[str],
@@ -80,6 +76,14 @@ def run_connector(name: str, handler: Callable[[Msg], Reply], roles: list[str],
     workers = []
     for msg in client.events():
         if not msg.addressed or msg.sender_name == name:
+            continue
+        take = TAKE_ROLE.search(msg.body)
+        if take and take[1] in roles:  # a template kickoff: wear the hat, then wait for the brief
+            try:
+                client.assume_role(msg.room_id, take[1])
+                client.post(msg.room_id, f"took the {take[1]} role; waiting for the brief", thread_id=msg.thread_id)
+            except Exception as e:
+                print(f"assume_role {take[1]}: {type(e).__name__}: {e}", file=sys.stderr)
             continue
         w = threading.Thread(target=_work, args=(client, msg, handler, long_s), daemon=True)
         w.start()

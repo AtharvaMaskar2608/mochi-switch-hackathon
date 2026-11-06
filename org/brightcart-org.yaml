@@ -110,6 +110,7 @@ resources:
     docs:
       - name: Team knowledge
         description: Standing knowledge for this room.
+        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
         content: "(placeholder: the dreamer replaces this)"
   leadership:
     type: room
@@ -126,6 +127,7 @@ resources:
     docs:
       - name: Team knowledge
         description: Standing knowledge for this room.
+        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
         content: "(placeholder: the dreamer replaces this)"
   eng:
     type: room
@@ -150,6 +152,7 @@ resources:
     docs:
       - name: Team knowledge
         description: Standing knowledge for this room.
+        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
         content: "(placeholder: the dreamer replaces this)"
   chief_ops:
     type: room
@@ -161,4 +164,5 @@ resources:
     docs:
       - name: Team knowledge
         description: Standing knowledge for this room.
+        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
         content: "(placeholder: the dreamer replaces this)"

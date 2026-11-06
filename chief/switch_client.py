@@ -1,17 +1,22 @@
 """Switch agent-protocol client: register, SSE stream + heartbeat, ops."""
 import argparse
 import json
+import logging
 import os
 import queue
+import re
 import threading
 import time
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
 from chief.models import Msg
+
+log = logging.getLogger(__name__)
 
 # Same profile as loadtest/seed.py in the Switch repo.
 PROFILE = {
@@ -30,7 +35,7 @@ def register(base_url: str, registration_token: str, name: str, description: str
         headers={"Authorization": f"Bearer {registration_token}"},
         json={"name": name, "description": description, "connector_type": "e2e",
               "integration_profile": PROFILE},
-        timeout=30,
+        timeout=120,  # registration provisions chat bot accounts; slow on a cold server
     )
     r.raise_for_status()
     b = r.json()
@@ -64,6 +69,7 @@ class SwitchClient:
         self._connected_once = threading.Event()  # a connection_state frame has arrived
         self._connects = 0  # connection_state frames seen
         self._queue: queue.Queue = queue.Queue()
+        self._identity_logs = 3  # debug-log the sender shape of the first few messages
 
     def close(self) -> None:
         self._stop.set()
@@ -184,6 +190,10 @@ class SwitchClient:
     def _msg(self, d: dict) -> Msg:
         p = d.get("payload", {})
         sender = p.get("sender", "")
+        if self._identity_logs > 0:
+            self._identity_logs -= 1
+            log.debug("identity: sender=%s… sender_name=%r payload keys=%s",
+                      sender[:14], p.get("sender_name"), sorted(p))
         ms = p.get("timestamp")
         ts = datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat() if ms else ""
         return Msg(
@@ -237,6 +247,13 @@ class SwitchClient:
             return self.op("send_targeted_message", body=body, target_names=names,
                            target_roles=roles, thread_id=thread_id)
 
+    def assume_role(self, room_id: str, role: str):
+        with self._lock:
+            self._enter(room_id)
+            # Switch leases one role per agent (any room): the newest work room takes the hat
+            self.op("release_role")
+            return self.op("assume_role", role=role)
+
     def context(self, room_id: str, limit: int = 50):
         with self._lock:
             self._enter(room_id)
@@ -259,6 +276,37 @@ class SwitchClient:
                     return d["id"]
             return self.op("create_room_document", name=name, description=name,
                            instructions="Maintained by Chief.", content=content)["document_id"]
+
+
+def connect(name: str, description: str, creds_path: Path) -> SwitchClient:
+    """Started client for agent `name`: creds from the gitignored json, else register (env
+    SWITCH_URL, SWITCH_REGISTRATION_TOKEN) and save them there (mode 600)."""
+    url = os.environ["SWITCH_URL"]
+    if creds_path.exists():
+        creds = json.loads(creds_path.read_text())
+    else:
+        agent_id, api_key = register(url, os.environ["SWITCH_REGISTRATION_TOKEN"], name, description)
+        creds = {"agent_id": agent_id, "api_key": api_key}
+        creds_path.touch(mode=0o600)
+        creds_path.write_text(json.dumps(creds))
+    client = SwitchClient(url, creds["api_key"], creds["agent_id"])
+    client.start()
+    return client
+
+
+def resolve_rooms(client, slugs: list[str]) -> dict[str, str]:
+    """slug -> room id from list_rooms. Exact name first, else a case-insensitive suffix after
+    a separator (Mattermost mirrors look like "Mattermost: product"). Missing slugs are left out."""
+    rooms = client.op("list_rooms") or []
+    out = {}
+    for slug in slugs:
+        exact = [r for r in rooms if r["name"].lower() == slug.lower()]
+        tail = re.compile(rf"(^|[\s:#/]){re.escape(slug.lower())}$")
+        hits = exact or [r for r in rooms if tail.search(r["name"].lower())]
+        if hits:
+            out[slug] = hits[0]["room_id"]
+        log.info("room %s -> %s", slug, [r["name"] for r in hits] or "not found")
+    return out
 
 
 def _from_env() -> SwitchClient:

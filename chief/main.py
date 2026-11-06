@@ -1,5 +1,5 @@
 """Chief main loop: `handle` decides (returns Actions, no network), `apply` executes them on Switch."""
-import json
+import logging
 import os
 import re
 import sys
@@ -10,12 +10,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from chief import commands, writer
+import yaml
+
+from chief import commands, factory, ticks, writer
 from chief.approvals import Approvals
-from chief.gate import decide
-from chief.ladder import IST, Ladder, final_rung, in_focus
+from chief.gate import decide, decide_with_claude
+from chief.ladder import HARD_ASK_FIRST, IST, Ladder, final_rung, in_focus
 from chief.memory.store import MemoryStore
 from chief.models import Msg, Profile
+from chief.switch_client import connect, resolve_rooms
+
+log = logging.getLogger("chief")
 
 Action = tuple[str, dict]  # kind: post|target|open_work_room|approval|hold|remember|forget|none
 
@@ -59,8 +64,11 @@ class Ctx:
     workflows_dir: Path = Path("workflows")
     now: Callable[[], datetime] = lambda: datetime.now(IST)
     work_rooms: dict[str, str] = field(default_factory=dict)  # work room id -> asker slug
-    hold_rooms: dict[str, str] = field(default_factory=dict)  # slug -> room to deliver held items in
     recent: dict[str, dict] = field(default_factory=dict)  # room id -> context re-read after a gap
+    room_ids: dict[str, str] = field(default_factory=dict)  # room slug ("chief-ops") -> Switch room id
+    # (room id, thread id, slug) -> {"msg", "template"}: the last offer, so a "yes" can run it
+    offers: dict[tuple, dict] = field(default_factory=dict)
+    data_agent: str = "mochi-data"  # who answers data-question rooms; standin-data on the judge path
 
 
 def _post(msg: Msg, body: str) -> Action:
@@ -157,20 +165,33 @@ def handle(msg: Msg, ctx: Ctx) -> list[Action]:
 
 
 TEAMMATE_MUST_ASK = "a teammate needs to ask for that one"
+YES_RE = re.compile(r"(@\S+\s+)*(yes|yeah|yep|sure|ok|okay|go ahead|please do|do it)"
+                    r"([\s,]+(yes|sure|ok|go ahead|please|do it|thanks))*[\s.!]*", re.I)
+SLUG_RE = re.compile(r"[a-z][a-z0-9-]{0,30}")
+
+
+def profile_slug(sender_name: str) -> str:
+    """Profile folder name for a sender; anything that isn't a plain slug reads as the unknown profile."""
+    s = sender_name.lower()
+    return s if SLUG_RE.fullmatch(s) else "unknown"
 VISIBLE = {"post", "target", "approval", "open_work_room"}
 
 
 def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
-    tick = re.fullmatch(r"\[tick\]\s+(\S+)", msg.body.strip())
     if ctx.self_name in (msg.sender, msg.sender_name.lower()):
-        return ctx.on_tick(tick[1], ctx) if tick else []  # only Chief's own timer posts run ticks
+        return []  # never answer itself; timer ticks run in-process (run(): tick_loop on_fire)
     if msg.is_agent and not msg.addressed:
         return []
-    if tick:
+    if re.fullmatch(r"\[tick\]\s+(\S+)", msg.body.strip()):
         return []  # a [tick] body from anyone else is ignored
-    slug = msg.sender_name.lower()
+    slug = profile_slug(msg.sender_name)
     if cmd := commands.parse(msg.body):
         return _command(cmd, msg, slug, ctx)
+    offer = ctx.offers.pop((msg.room_id, msg.thread_id, slug), None) if msg.addressed else None
+    sender = ctx.store.profile(slug)
+    if offer and YES_RE.fullmatch(msg.body.strip()) and not msg.is_agent and sender.role != "unknown":
+        m = Msg(**offer["msg"])  # the offered request, now accepted: act on it as first decided
+        return _act(m, sender, offer["template"], ctx)
     if not msg.addressed and ctx.ladder.is_quiet(msg.room_id):
         return [("none", {})]  # skip gate/writer calls whose output would be dropped anyway
     acts = _decide(msg, slug, ctx)
@@ -197,12 +218,19 @@ def _decide(msg: Msg, slug: str, ctx: Ctx) -> list[Action]:
     if rung == "silent":
         return [("none", {})]
     if focused and d.urgency < URGENT:
-        return [("hold", {"for": focused.slug, "room_id": msg.room_id,
-                          "item": f"{msg.sender_name} in {msg.room_name}: {msg.body}"})]
+        return [("hold", {"for": focused.slug, "item": {
+            "text": f"{msg.sender_name} in {msg.room_name}: {msg.body}",
+            "room_id": msg.room_id, "thread_id": msg.thread_id}})]
     if rung == "ask_first" and not person:
         return [_post(msg, TEAMMATE_MUST_ASK)]  # capped at offer: no self-owned approvals
     if rung == "offer":
-        return [_post(msg, ctx.writer.offer_line(msg, template))]
+        # Not sure it fits? Name the gate's best guess in the offer and let the person's "yes" settle it,
+        # unless that guess is on the hard ask-first list (a yes must never skip an approval).
+        guess = d.template if ACTION_FOR_TEMPLATE.get(d.template, "answer") not in HARD_ASK_FIRST else None
+        offered = template or guess
+        if msg.addressed:  # a "yes" from them in this thread runs it (see _handle)
+            ctx.offers[(msg.room_id, msg.thread_id, slug)] = {"msg": msg.__dict__.copy(), "template": offered}
+        return [_post(msg, ctx.writer.offer_line(msg, offered))]
     if rung == "ask_first":
         owner = {"deploy": ctx.release_owner, "create_agent": ctx.org_admin}.get(action, slug)
         return [_approval(msg, owner, action, template)]
@@ -225,18 +253,25 @@ def _apply_one(kind: str, a: dict, client, ctx: Ctx) -> None:
                       thread_id=a.get("thread_id"))
     elif kind == "open_work_room":
         yaml_text = (ctx.workflows_dir / f"{a['template']}.yaml").read_text()
-        room = client.room_from_yaml(yaml_text, {"brief": a["brief"], "asker": a["asker"]})
+        inputs = {"brief": a["brief"], "asker": a["asker"]}
+        names = None
+        if "data_agent" in (yaml.safe_load(yaml_text).get("params") or {}):
+            inputs["data_agent"] = ctx.data_agent
+            names = [ctx.data_agent]  # by name: the role has no holder until the agent assumes it at kickoff
+        room = client.room_from_yaml(yaml_text, inputs)
         rid = room.get("id") or room.get("room_id")
         ctx.work_rooms[rid] = a["asker"]
-        client.target(rid, a["brief"], roles=[a["lead_role"]])
-        client.post(a["room_id"], f"opened {room.get('name', 'a work room')} for this", thread_id=a.get("thread_id"))
+        client.target(rid, a["brief"], names=names, roles=None if names else [a["lead_role"]])
+        name = room.get("room_name") or room.get("name") or "a work room"
+        client.post(a["room_id"], f"opened {name} for this", thread_id=a.get("thread_id"))
     elif kind == "approval":
         code = ctx.approvals.request(a["action"], a["owner"], a)
         client.post(a["room_id"], f"{a['owner']}: this needs your ok ({a['action']}). "
                     f"Reply 'approve {code}' or 'deny {code}'.", thread_id=a.get("thread_id"))
     elif kind == "hold":
-        ctx.ladder.hold(a["for"], a["item"])
-        ctx.hold_rooms[a["for"]] = a["room_id"]
+        ctx.ladder.hold(a["for"], a["item"])  # the item carries its own room
+    elif kind == "dream":
+        ticks.apply_dream(a, client, ctx)
     elif kind == "remember":
         ctx.store.add("personal", a["owner"], "fact", a["text"],
                       {"room": a["room_name"], "date": ctx.now().date().isoformat(), "by": "person"})
@@ -256,29 +291,29 @@ def step(msg: Msg, client, ctx: Ctx) -> None:
 
 def release_held(client, ctx: Ctx) -> None:
     profiles = {p.slug: p for p in _people(ctx)}
-    for slug, items in ctx.ladder.release_due(profiles).items():
-        try:
-            body = ctx.writer.batched_brief(items, profiles[slug])
-            client.target(ctx.hold_rooms[slug], body, names=[slug])
-        except Exception as e:
-            print(f"release {slug}: {type(e).__name__}: {e}", file=sys.stderr)
+    try:
+        acts = ticks.held_actions(ctx.ladder.release_due(profiles), profiles, ctx.writer)
+    except Exception as e:  # writer failed: these items are dropped, the loop lives on
+        print(f"release: {type(e).__name__}: {e}", file=sys.stderr)
+        return
+    apply(acts, client, ctx)
 
 
-def _client():
-    from chief.switch_client import SwitchClient, register  # lazy: Task 2
-
-    url, cache = os.environ["SWITCH_URL"], Path(".chief.json")
-    if cache.exists():
-        creds = json.loads(cache.read_text())
-    else:
-        creds = register(url, os.environ["SWITCH_REGISTRATION_TOKEN"], "chief", [])
-        cache.write_text(json.dumps(creds))
-    return SwitchClient(url, **creds)
+ROOM_SLUGS = ["product", "leadership", "eng", "chief-ops"]
 
 
 def run() -> None:
-    client = _client()
-    ctx = Ctx(MemoryStore(Path("memory")), Ladder(), Approvals(), TEMPLATES, ROLES)
+    logging.basicConfig(level=os.environ.get("CHIEF_LOG", "INFO"), format="%(levelname)s %(name)s: %(message)s")
+    client = connect("chief", "Chief, the team's chief of staff", Path(".chief.json"))
+    gate = decide if os.environ.get("TYPESAFE_API_KEY") else decide_with_claude
+    if gate is decide_with_claude:
+        log.warning("TYPESAFE_API_KEY is not set: gating with Claude (decide_with_claude) instead of Jev")
+    else:
+        log.info("gating with Jev")
+    ctx = Ctx(MemoryStore(Path("memory")), Ladder(), Approvals(), TEMPLATES, ROLES, gate=gate,
+              on_tick=ticks.on_tick, data_agent=os.environ.get("CHIEF_DATA_AGENT", "mochi-data"))
+    ctx.factory_build = lambda text, ctx: factory.build(text, client, approved=True)
+    ctx.room_ids = resolve_rooms(client, ROOM_SLUGS)
     lock = threading.Lock()  # ponytail: one lock for loop + releaser; Ladder is not thread-safe
 
     def releaser():
@@ -288,7 +323,15 @@ def run() -> None:
                 release_held(client, ctx)
 
     threading.Thread(target=releaser, daemon=True).start()
-    client.start()
+    def fire(kind: str) -> None:  # Switch does not echo Chief's own [tick] post back, so run it here
+        with lock:
+            apply(ctx.on_tick(kind, ctx), client, ctx)
+
+    if "chief-ops" in ctx.room_ids:
+        threading.Thread(target=ticks.tick_loop, args=(client, ctx.room_ids["chief-ops"]),
+                         kwargs={"on_fire": fire}, daemon=True).start()
+    else:
+        log.warning("no chief-ops room found: timer ticks are off")
     for msg in client.events():
         with lock:
             step(msg, client, ctx)

@@ -255,9 +255,9 @@ def test_writer_error_means_no_action(ctx):
 def test_ticks_and_tick_command_go_to_hook(ctx):
     seen = []
     ctx.on_tick = lambda kind, c: seen.append(kind) or []
-    handle(msg("[tick] morning", sender="chief"), ctx)
+    handle(msg("[tick] morning", sender="chief"), ctx)  # Chief's own post: never acted on (tick_loop runs it)
     handle(msg("!tick dream"), ctx)
-    assert seen == ["morning", "dream"]
+    assert seen == ["dream"]
 
 
 def test_remember_and_forget(ctx):
@@ -267,3 +267,89 @@ def test_remember_and_forget(ctx):
     apply(handle(msg("forget bullet summaries"), ctx), c, ctx)
     assert ctx.store.items("ravi") == []
     assert [e[2] for e in c.log] == ["remembered", "forgotten"]
+
+
+def test_held_items_delivered_to_their_own_room(ctx):
+    ctx.ladder.hold("meera", {"text": "asha: board deck?", "room_id": "LEAD", "thread_id": None})
+    ctx.ladder.hold("meera", {"text": "dev: flaky test?", "room_id": "ENG", "thread_id": None})
+    ctx.ladder.hold("meera", {"text": "dev: and the lint?", "room_id": "ENG", "thread_id": None})
+    ctx.ladder._now = lambda: NOON.replace(hour=16)
+    c = FakeClient()
+    release_held(c, ctx)
+    assert sorted(c.log) == [("target", "ENG", "dev: flaky test? | dev: and the lint?", ["meera"], None),
+                             ("target", "LEAD", "asha: board deck?", ["meera"], None)]
+
+
+def test_yes_after_offer_runs_the_offered_template(ctx):
+    ctx.gate = gate_of(rung="offer", template="data-question", fits=0.9)
+    acts = handle(msg("@chief where is the refunds data?", addressed=True), ctx)
+    assert acts == [("post", {"room_id": "R", "body": "want me to take this?", "thread_id": None})]
+    ctx.gate = gate_of(rung="silent")  # the yes is not re-gated
+    acts = handle(msg("@chief yes", addressed=True), ctx)
+    assert [k for k, _ in acts] == ["open_work_room"] and acts[0][1]["template"] == "data-question"
+    assert handle(msg("@chief yes", addressed=True), ctx) == [("none", {})]  # an offer runs once
+
+
+def test_yes_from_someone_else_or_unaddressed_does_not_run_offer(ctx):
+    ctx.gate = gate_of(rung="offer", template="data-question", fits=0.9)
+    handle(msg("@chief where is the refunds data?", addressed=True), ctx)
+    ctx.gate = gate_of(rung="silent")
+    assert handle(msg("@chief yes", sender="asha", addressed=True), ctx) == [("none", {})]
+    assert handle(msg("yes"), ctx) == [("none", {})]
+    assert [k for k, _ in handle(msg("@chief go ahead", addressed=True), ctx)] == ["open_work_room"]
+
+
+def test_yes_settles_an_unsure_template_but_never_a_hard_ask_first_one(ctx):
+    ctx.gate = gate_of(rung="offer", template="data-question", fits=0.5)
+    handle(msg("@chief refunds have felt high lately", addressed=True), ctx)
+    assert ctx.offers[("R", None, "ravi")]["template"] == "data-question"
+    assert [k for k, _ in handle(msg("@chief yes please", addressed=True), ctx)] == ["open_work_room"]
+    ctx.gate = gate_of(rung="offer", template="release-train", fits=0.5)
+    handle(msg("@chief maybe we should ship the refunds fix", addressed=True), ctx)
+    assert ctx.offers[("R", None, "ravi")]["template"] is None
+    assert handle(msg("@chief yes", addressed=True), ctx) == [("none", {})]
+
+
+def test_yes_phrasings():
+    from chief.main import YES_RE
+
+    for ok in ("yes", "@chief yes please", "@chief yes, go ahead", "Sure, thanks!", "go ahead."):
+        assert YES_RE.fullmatch(ok), ok
+    for no in ("yes but only for march", "no", "@chief what about yesterday"):
+        assert not YES_RE.fullmatch(no), no
+
+
+def test_profile_slug_sanitized():
+    from chief.main import profile_slug
+
+    assert profile_slug("Ravi") == "ravi"
+    for bad in ("../etc", "ravi/../../x", "", "1abc", "a" * 40, "ra vi"):
+        assert profile_slug(bad) == "unknown", bad
+
+
+def test_path_traversal_sender_gets_unknown_profile(ctx):
+    seen = []
+    act = gate_of(rung="act")
+    ctx.gate = lambda m, sender, *a: (seen.append(sender), act(m, sender, *a))[1]
+    handle(msg("help", sender="../etc", addressed=True), ctx)
+    assert seen[0].slug == "unknown" and seen[0].role == "unknown"
+
+
+def test_data_agent_passed_when_workflow_declares_it(ctx):
+    (ctx.workflows_dir / "data-question.yaml").write_text("params: {data_agent: {type: agent}}\n")
+    ctx.data_agent = "standin-data"
+    c = FakeClient()
+    apply([("open_work_room", {"template": "data-question", "brief": "b", "asker": "ravi",
+                               "lead_role": "data-steward", "room_id": "R", "thread_id": None})], c, ctx)
+    assert c.log[0][2] == {"brief": "b", "asker": "ravi", "data_agent": "standin-data"}
+    assert c.log[1] == ("target", "W1", "b", ["standin-data"], None)  # by name: nobody holds the role yet
+    assert c.log[2] == ("post", "R", "opened work-data-question-20261107-1100 for this")
+
+
+def test_dream_action_routed_to_ticks(ctx, monkeypatch):
+    from chief import ticks
+
+    got = []
+    monkeypatch.setattr(ticks, "apply_dream", lambda a, client, ctx: got.append(a))
+    apply([("dream", {"rooms": ["R"], "room_id": "OPS"})], FakeClient(), ctx)
+    assert got == [{"rooms": ["R"], "room_id": "OPS"}]

@@ -7,3 +7,5 @@ __pycache__/
 .superpowers/
 .connector-*.json
 .claude/
+.local-test-users.json
+.local-*.env

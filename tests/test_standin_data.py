@@ -66,6 +66,17 @@ def test_expression_cannot_leak_customer_name():
     assert not any(n in t for n in ("AVA", "LIAM", "Ava", "Liam", "Sam", "Zoe"))
 
 
+def test_thinking_blocks_skipped():
+    blocks = [SimpleNamespace(type="thinking", thinking="hmm"), SimpleNamespace(type="text", text="select 1 as n")]
+    client = SimpleNamespace(messages=SimpleNamespace(create=lambda **k: SimpleNamespace(content=blocks)))
+    assert sd.handle(Msg("r", "#x", 1, "u", "U", "q", None, True, False, "t"), client).text == "| n |\n|---|\n| 1 |"
+
+
+def test_fenced_query_inside_prose_is_used():
+    assert ask("I can't reach your warehouse, but run this:\n```sql\nselect 1 as n\n```\nCaveats: none.") == \
+        "| n |\n|---|\n| 1 |"
+
+
 def test_reply_strips_mentions():
     t = ask('select 1 as "@reviewer"')
     assert "@" not in t and "\uff20reviewer" in t
