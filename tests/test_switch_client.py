@@ -150,3 +150,12 @@ def test_op_409_not_open_retries_after_reconnect():
     assert c.op("list_rooms") == ["ok"]
     c.close()
     assert len(ops) == 2
+
+
+def test_start_timeout_reports_status():
+    import pytest
+    c = SwitchClient("http://s", "k", "a1", retry_delay=0.05,
+                     http=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(401))))
+    with pytest.raises(RuntimeError, match="last status 401"):
+        c.start(timeout=0.3)
+    c.close()

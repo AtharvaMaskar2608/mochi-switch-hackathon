@@ -54,6 +54,8 @@ class SwitchClient:
         self._last_seq = 0
         self._room: str | None = None  # room claimed by this connection
         self._room_names: dict[str, str] = {}
+        self._name_miss: dict[str, float] = {}  # room_id -> retry lookup after this time
+        self._last_status: int | None = None  # last HTTP status of the event stream
         self._stop = threading.Event()
         self._beat: threading.Thread | None = None
         self._resp: httpx.Response | None = None
@@ -99,7 +101,7 @@ class SwitchClient:
                 pass
 
     def _room_name(self, room_id: str) -> str:
-        if room_id not in self._room_names:
+        if room_id not in self._room_names and self._name_miss.get(room_id, 0) < time.time():
             try:
                 r = self._post_op("list_rooms", {})  # no retry/wait: runs on the stream thread
                 r.raise_for_status()
@@ -107,19 +109,21 @@ class SwitchClient:
                     self._room_names[x["room_id"]] = x["name"]
             except Exception:
                 pass
+            if room_id not in self._room_names:
+                self._name_miss[room_id] = time.time() + 60  # don't retry on every message
         return self._room_names.get(room_id, room_id)
 
-    def start(self, rooms: list[str] | None = None, timeout: float = 10) -> None:
+    def start(self, timeout: float = 10) -> None:
         """Open the stream in a daemon thread; return once connection_state arrived."""
         if self._thread is None or not self._thread.is_alive():
             self._stop.clear()
-            self._thread = threading.Thread(target=self._run, args=(rooms,), daemon=True)
+            self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
         if not self._connected_once.wait(timeout):
-            raise RuntimeError("switch: no connection_state frame within %ss" % timeout)
+            raise RuntimeError(f"stream not open after {timeout}s (last status {self._last_status})")
 
-    def events(self, rooms: list[str] | None = None) -> Iterator[Msg]:
-        self.start(rooms)
+    def events(self) -> Iterator[Msg]:
+        self.start()
         while not self._stop.is_set():
             try:
                 d = self._queue.get(timeout=0.2)
@@ -127,16 +131,15 @@ class SwitchClient:
                 continue
             yield self._msg(d)
 
-    def _run(self, rooms: list[str] | None) -> None:
+    def _run(self) -> None:
         params = {"connection_id": self.connection_id, "scope": "all", "filter": "all"}
-        if rooms:
-            params["rooms"] = ",".join(rooms)
         while not self._stop.is_set():
             headers = {**self.headers, "Accept": "text/event-stream"}
             if self._last_seq:
                 headers["Last-Event-ID"] = str(self._last_seq)
             try:
                 with self.http.stream("GET", f"{self.base}/events", params=params, headers=headers) as resp:
+                    self._last_status = resp.status_code
                     resp.raise_for_status()
                     self._resp = resp
                     for kind, d in self._frames(resp):
