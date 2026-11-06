@@ -20,10 +20,14 @@ class Reply:
     names: list[str] = field(default_factory=list)
 
 
+def _clean(t: str) -> str:
+    return t.replace("@", "\uff20")  # a literal @name would re-address an agent
+
+
 def _body(r: Reply) -> str:
     # ponytail: SwitchClient.post has no attachment arg, so every file is posted as a path;
     # files <= 20 MB could be attached once the client supports it.
-    lines = [r.text]
+    lines = [_clean(r.text)]
     for f in r.files:
         big = f.exists() and f.stat().st_size > MAX_ATTACH
         lines.append(f"file{' (over 20 MB)' if big else ''}: {f}")
@@ -52,7 +56,7 @@ def _work(client, msg: Msg, handler: Callable[[Msg], Reply], long_s: float) -> N
     t.join(long_s)
     if t.is_alive():
         one = (msg.body.strip().splitlines() or [""])[0][:80]
-        client.post(msg.room_id, f"working on it: {one}", thread_id=msg.thread_id)
+        client.post(msg.room_id, f"working on it: {_clean(one)}", thread_id=msg.thread_id)
         t.join()
     _send(client, msg, box[0])
 

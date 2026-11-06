@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -27,14 +28,23 @@ class FakeClient:
         self.calls.append(("target", body, roles, thread_id))
 
 
-def fake_scan(tmp_path, vuln, rc):
+def fake_scan(tmp_path, vuln, rc, fresh=True):
     s = {"vulnerabilities": {"critical": 0, "high": vuln, "medium": 0}, "sast": {"secrets": 0},
          "policy": {"breached": bool(vuln)},
          "top_vulnerabilities": [{"id": "CVE-1", "package": "lodash", "version": "1", "fix": "2"}] * vuln}
     d = tmp_path / "reports" / security._slug(tmp_path / "x") / "latest"
     d.mkdir(parents=True)
     (d / "summary.json").write_text(json.dumps(s))
-    return lambda *a, **k: SimpleNamespace(returncode=rc)
+    f = d / "summary.json"
+    old = f.stat().st_mtime - 100
+    os.utime(f, (old, old))
+
+    def run(*a, **k):
+        if fresh:
+            f.write_text(f.read_text())
+        return SimpleNamespace(returncode=rc)
+
+    return run
 
 
 def test_security_exit1_blocks_and_targets_intern(tmp_path):
@@ -76,3 +86,19 @@ def test_long_job_posts_working_first():
     run_connector("x", lambda m: (time.sleep(0.2), Reply("done"))[1], [], client=c, long_s=0.05, once=True)
     assert [x[1] for x in c.calls] == ["working on it: make video", "done"]
     assert all(x[-1] == "t1" for x in c.calls)
+
+
+def test_security_crash_blocks(tmp_path):
+    r = security.handle(msg(f"owner: dev\npath: {tmp_path/'x'}"), run=fake_scan(tmp_path, 0, 2), cyber=tmp_path)
+    assert r.text == "BLOCKED: scan failed (exit 2)" and r.roles == ["intern-dev"]
+
+
+def test_security_stale_report_blocks(tmp_path):
+    r = security.handle(msg(f"path: {tmp_path/'x'}"), run=fake_scan(tmp_path, 0, 0, fresh=False), cyber=tmp_path)
+    assert r.text == "BLOCKED: no fresh report"
+
+
+def test_echo_and_reply_strip_mentions():
+    c = FakeClient([msg("hey @ship do it")])
+    run_connector("x", lambda m: (time.sleep(0.2), Reply("ping @ship"))[1], [], client=c, long_s=0.05, once=True)
+    assert all("@" not in x[1] for x in c.calls) and "\uff20ship" in c.calls[0][1]

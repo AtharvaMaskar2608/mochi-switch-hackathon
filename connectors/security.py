@@ -7,6 +7,7 @@ Work-room brief convention: lines in the message body, e.g.
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from chief.models import Msg
@@ -27,14 +28,24 @@ def _slug(target: Path) -> str:  # mirrors bin/scan
     return (s[len(prefix):] if s.startswith(prefix) else s).replace("/", "-")
 
 
+def _block_roles(owner: str | None) -> list[str]:
+    return [f"intern-{owner}"] if owner else ["security"]
+
+
 def handle(msg: Msg, run=subprocess.run, cyber: Path = CYBER) -> Reply:
     owner = _field(msg.body, "owner")
     target = Path(_field(msg.body, "path") or DEFAULT_PATH)
     if not target.is_absolute():
         target = cyber / target
+    start = time.time()
     p = run([str(cyber / "bin/scan"), str(target), "--fail-on", "high"],
             capture_output=True, text=True, cwd=cyber)
-    s = json.loads((cyber / "reports" / _slug(target) / "latest" / "summary.json").read_text())
+    if p.returncode not in (0, 1):  # fail closed: a crashed scan never passes
+        return Reply(f"BLOCKED: scan failed (exit {p.returncode})", roles=_block_roles(owner))
+    path = cyber / "reports" / _slug(target) / "latest" / "summary.json"
+    if not path.exists() or path.stat().st_mtime < start:
+        return Reply("BLOCKED: no fresh report", roles=_block_roles(owner))
+    s = json.loads(path.read_text())
     v = s["vulnerabilities"]
     # gate in code: scan exit 1, or any high/critical, or secrets
     blocked = p.returncode == 1 or v["high"] > 0 or v["critical"] > 0 or s["policy"]["breached"]
@@ -43,7 +54,7 @@ def handle(msg: Msg, run=subprocess.run, cyber: Path = CYBER) -> Reply:
         return Reply(f"PASSED: {detail}", roles=["release-scribe"])
     top = "; ".join(f"{t['id']} {t['package']} {t['version']} -> fix {t['fix']}"
                     for t in s["top_vulnerabilities"][:5])
-    return Reply(f"BLOCKED: {detail}. {top}", roles=[f"intern-{owner}"] if owner else ["security"])
+    return Reply(f"BLOCKED: {detail}. {top}", roles=_block_roles(owner))
 
 
 if __name__ == "__main__":
