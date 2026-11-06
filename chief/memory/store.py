@@ -93,7 +93,7 @@ class MemoryStore:
                                 edited_by_person=source.get("by") == "person")
         folder = self._dir(tier, owner)
         if status == "proposed":
-            folder = folder.parent / "proposals"
+            folder = self.root / "team" / "proposals"
         self._write(folder / f"{item_id}.md", post)
         return item_id
 

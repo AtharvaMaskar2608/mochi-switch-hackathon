@@ -81,3 +81,9 @@ def test_seed_memory_loads():
     assert s.profile("meera").focus == [("10:00", "15:00")]
     assert s.profile("asha").style == "one line and a chart"
     assert len(s.items("team")) == 2
+
+
+def test_proposal_written_to_team_proposals(store):
+    i = store.add("personal", "ravi", "fact", "Maybe X", SRC, status="proposed")
+    assert (store.root / "team" / "proposals" / f"{i}.md").exists()
+    assert not (store.root / "people" / "ravi").exists()
