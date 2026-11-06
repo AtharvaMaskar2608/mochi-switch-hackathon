@@ -1,4 +1,5 @@
 import json
+import time
 from itertools import islice
 
 import httpx
@@ -68,3 +69,56 @@ def test_op_sends_connection_header():
     r = seen[-1]
     assert r.headers["x-switch-connection-id"] == c.connection_id
     assert json.loads(r.content) == {"body": "x"}
+
+
+def test_gap_with_lower_sequence_resumes():
+    gap = frame("gap", {"from_sequence": 50, "resumed_at": 3, "reason": "restart"})
+    c, _ = client(STATE + msg(50), STATE + gap + msg(3, room="R2"))
+    got = list(islice(c.events(), 2))
+    c.close()
+    assert [m.sequence for m in got] == [50, 3]
+    assert {"R", "R2"} <= c.gap_rooms  # covered rooms plus the message's room
+
+
+def _wait(cond, t=2.0):
+    end = time.time() + t
+    while time.time() < end and not cond():
+        time.sleep(0.01)
+    return cond()
+
+
+def test_heartbeat_fires_at_interval():
+    state = frame("connection_state", {"heartbeat_interval_seconds": 0.01, "rooms": ["R"]})
+    c, seen = client(state + msg(1))
+    next(c.events())
+
+    def beats():
+        return [r for r in seen if r.url.path.endswith("/connection/beat")]
+
+    assert _wait(lambda: len(beats()) >= 2)
+    c.close()
+    assert json.loads(beats()[0].content)["connection_id"] == c.connection_id
+
+
+def test_beat_404_triggers_reconnect():
+    n = [0]
+
+    def slow():
+        yield STATE.replace("3600", "0.01").encode()
+        time.sleep(0.5)
+        yield b": ka\n\n"
+
+    def handler(req):
+        if req.url.path.endswith("/events"):
+            n[0] += 1
+            body = slow() if n[0] == 1 else iter([(STATE + msg(5)).encode()])
+            return httpx.Response(200, content=body)
+        if req.url.path.endswith("/connection/beat"):
+            return httpx.Response(404)
+        return httpx.Response(200, json={"result": []})
+
+    c = SwitchClient("http://s", "k", "a1", http=httpx.Client(transport=httpx.MockTransport(handler)),
+                     retry_delay=0)
+    m = next(c.events())
+    c.close()
+    assert m.sequence == 5 and n[0] == 2

@@ -38,6 +38,9 @@ def register(base_url: str, registration_token: str, name: str, description: str
 class SwitchClient:
     def __init__(self, base_url: str, api_key: str, agent_id: str, http: httpx.Client | None = None,
                  retry_delay: float = 1.0):
+        self._lock = threading.RLock()  # _enter + op must be atomic across threads
+        self._covered: set[str] = set()  # rooms the stream covers (connection_state / subscription_changed)
+        self._agent_ids: set[str] = set()  # agent participant ids seen in connect_to_room
         self.base = f"{base_url.rstrip('/')}/agents/{agent_id}"
         self.agent_id = agent_id
         self.http = http or httpx.Client(timeout=httpx.Timeout(30, read=None))
@@ -110,6 +113,10 @@ class SwitchClient:
                     resp.raise_for_status()
                     self._resp = resp
                     for kind, d in self._frames(resp):
+                        if kind in ("connection_state", "subscription_changed"):
+                            self._covered = set(d.get("rooms", []))
+                        if kind in ("evicted", "room_released"):
+                            self._room = None
                         if kind == "connection_state":
                             if self._beat is None:
                                 self._beat = threading.Thread(
@@ -118,6 +125,9 @@ class SwitchClient:
                                 self._beat.start()
                         elif kind == "gap":
                             self._gap_pending = True
+                            self.gap_rooms |= self._covered  # scope=all: a gap hits every room
+                            # server sequence may have reset (restart): resume from its view
+                            self._last_seq = max(0, d.get("resumed_at", d.get("from_sequence", 1)) - 1)
                         elif d.get("sequence"):  # any domain event advances the cursor
                             seq = d["sequence"]
                             if seq <= self._last_seq:
@@ -129,10 +139,11 @@ class SwitchClient:
                                 self.gap_rooms.add(d["room_id"])
                                 self._gap_pending = False
                             yield self._msg(d)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, httpx.StreamError):
                 pass
             finally:
                 self._resp = None
+                self._room = None  # claim may be lost across a reconnect
             self._stop.wait(self.retry_delay)
 
     def _msg(self, d: dict) -> Msg:
@@ -145,32 +156,42 @@ class SwitchClient:
             sender=sender, sender_name=p.get("sender_name", sender), body=p.get("body", ""),
             thread_id=p.get("thread_id"), addressed=bool(p.get("addressed")),
             # ponytail: "@switch-agent-…" id shape is a convention, not guaranteed by the protocol
-            is_agent=sender.startswith("@switch-agent"), ts=ts)
+            is_agent=sender in self._agent_ids or sender.startswith("@switch-agent"), ts=ts)
 
     # ---- ops ----
     def op(self, name: str, **args):
         r = self.http.post(f"{self.base}/ops/{name}", headers={
             **self.headers, "X-Switch-Connection-Id": self.connection_id}, json=args)
+        if r.status_code == 409:
+            self._room = None  # connection/room claim is gone; re-enter next time
         r.raise_for_status()
         return r.json().get("result")
 
+    def _learn(self, info) -> None:
+        for p in (info or {}).get("participants", []):
+            if isinstance(p, dict) and p.get("type") == "agent" and p.get("id"):
+                self._agent_ids.add(p["id"])
+
     def _enter(self, room_id: str) -> None:
         if self._room != room_id:
-            self.op("connect_to_room", room_id=room_id)
+            self._learn(self.op("connect_to_room", room_id=room_id))
             self._room = room_id
 
     def post(self, room_id: str, body: str, thread_id: str | None = None):
-        self._enter(room_id)
-        return self.op("post_message", body=body, thread_id=thread_id)
+        with self._lock:
+            self._enter(room_id)
+            return self.op("post_message", body=body, thread_id=thread_id)
 
     def target(self, room_id: str, body: str, names=None, roles=None, thread_id=None):
-        self._enter(room_id)
-        return self.op("send_targeted_message", body=body, target_names=names,
-                       target_roles=roles, thread_id=thread_id)
+        with self._lock:
+            self._enter(room_id)
+            return self.op("send_targeted_message", body=body, target_names=names,
+                           target_roles=roles, thread_id=thread_id)
 
     def context(self, room_id: str, limit: int = 50):
-        self._enter(room_id)
-        return self.op("read_context", limit=limit)
+        with self._lock:
+            self._enter(room_id)
+            return self.op("read_context", limit=limit)
 
     def room_from_yaml(self, yaml: str, inputs: dict) -> dict:
         return self.op("create_room_from_yaml", yaml=yaml, inputs=inputs)
@@ -179,14 +200,16 @@ class SwitchClient:
         return self.op("run_template", template_id=template_id, inputs=inputs)
 
     def room_doc(self, room_id: str, name: str, content: str) -> str:
-        info = self.op("connect_to_room", room_id=room_id)  # also lists the room's documents
-        self._room = room_id
-        for d in info.get("documents", []):
-            if d.get("name") == name:
-                self.op("update_room_document", document_id=d["id"], content=content)
-                return d["id"]
-        return self.op("create_room_document", name=name, description=name,
-                       instructions="Maintained by Chief.", content=content)["document_id"]
+        with self._lock:
+            info = self.op("connect_to_room", room_id=room_id)  # also lists the room's documents
+            self._room = room_id
+            self._learn(info)
+            for d in info.get("documents", []):
+                if d.get("name") == name:
+                    self.op("update_room_document", document_id=d["id"], content=content)
+                    return d["id"]
+            return self.op("create_room_document", name=name, description=name,
+                           instructions="Maintained by Chief.", content=content)["document_id"]
 
 
 def _from_env() -> SwitchClient:
