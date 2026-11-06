@@ -9,28 +9,26 @@ params:
   asker:
     type: user
     label: Asker
-group:
-  name: brightcart
-rooms:
-  - name: work-shipped-digest-{$timestamp}
-    description: Write the weekly shipped digest.
-    channel_type: channel_private
-    agents: [ship, designer, chief]
-    users: ["{asker}"]
-    roles:
-      - name: release-scribe
-        instructions: Write the digest from merged PRs and releases of the last 7 days, then post DONE.
-      - name: video
-        instructions: Only if the brief asks for a video, make a short one from the digest.
-    instructions: |
-      Shipped digest for {asker}.
+room:
+  name: work-shipped-digest-{$timestamp}
+  description: Write the weekly shipped digest.
+  channel_type: channel_private
+  agents: [ship, designer, chief]
+  users: ["{asker}"]
+  roles:
+    - name: release-scribe
+      instructions: Write the digest from merged PRs and releases of the last 7 days, then post DONE.
+    - name: video
+      instructions: Only if the brief asks for a video, make a short one from the digest.
+  instructions: |
+    Shipped digest for {asker}.
 
-      Brief:
-      {brief}
+    Brief:
+    {brief}
 
-      Steps:
-      1. The release-scribe (ship) writes the digest in this thread.
-      2. Only if the brief asks for a video, the video role (designer) makes one from the digest. Otherwise skip it.
-      3. The release-scribe posts DONE on its own line. That ends the work.
-    kickoff: |
-      @ship you hold the release-scribe role. Read the brief in the room instructions and write the digest as your CLAUDE.md says. Post DONE when finished.
+    Steps:
+    1. The release-scribe (ship) writes the digest in this thread.
+    2. If the brief asks for a video, ship then addresses @designer (the video role) with the digest. designer makes the video, replies in the thread, and does not @ anyone.
+    3. If the brief does not ask for a video, skip step 2. The release-scribe posts DONE on its own line; that ends the work. With a video, ship posts DONE after designer replies.
+kickoff: |
+  @ship take the release-scribe role. Read the brief in the room instructions and write the digest as your CLAUDE.md says. If the brief asks for a video, address designer next, as the room instructions say. Post DONE when finished.

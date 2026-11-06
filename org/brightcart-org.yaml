@@ -70,6 +70,7 @@ resources:
     machine: "{machine}"
     directory: "{repo_dir}/agents/sre"
     addressing: owner-agents
+  # Interns are owned by the deploying admin (the schema has no owner field); Chief enforces who the approver is.
   intern_meera:
     type: agent
     name: intern-meera
@@ -99,7 +100,7 @@ resources:
   product:
     type: room
     group: brightcart
-    name: "#product"
+    name: product
     description: Product questions and data.
     agents: [chief, mochi_data]
     users: [asha, ravi]
@@ -113,7 +114,7 @@ resources:
   leadership:
     type: room
     group: brightcart
-    name: "#leadership"
+    name: leadership
     description: Leadership updates and digests.
     agents: [chief, ship]
     users: [asha, ravi]
@@ -129,7 +130,7 @@ resources:
   eng:
     type: room
     group: brightcart
-    name: "#eng"
+    name: eng
     description: Engineering.
     agents: [chief, reviewer, sre, intern_meera, intern_dev]
     users: [ravi, meera, dev]
@@ -153,7 +154,7 @@ resources:
   chief_ops:
     type: room
     group: brightcart
-    name: "#chief-ops"
+    name: chief-ops
     description: Chief's own control room; ticks and approvals.
     agents: [chief]
     users: [asha, ravi, meera, dev]

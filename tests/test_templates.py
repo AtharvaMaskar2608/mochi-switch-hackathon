@@ -14,7 +14,7 @@ AGENTS = {"chief", "mochi-data", "ship", "reviewer", "security", "sre", "designe
           "intern-meera", "intern-dev", "standin-data"}
 ROLES = {"data-steward", "release-scribe", "reviewer", "security", "deployer", "on-call",
          "release-owner", "video", "intern-meera", "intern-dev"}
-ROOMS = {"#product", "#leadership", "#eng", "#chief-ops"}
+ROOMS = {"product", "leadership", "eng", "chief-ops"}
 INTERNS = ("intern-meera", "intern-dev")
 
 
@@ -30,7 +30,7 @@ def expand(s):
 def rooms_of(doc):
     if doc.get("version") == 2:
         return [r for r in doc["resources"].values() if r["type"] == "room"]
-    return doc.get("rooms") or [doc["room"]]
+    return [doc["room"]]
 
 
 def test_all_yaml_parses():
@@ -49,7 +49,7 @@ def test_names_match_global_names_table():
                 if r["type"] == "group":
                     assert r["name"] == "brightcart"
         else:
-            assert doc["group"]["name"] == "brightcart", p
+            assert "group" not in doc and "rooms" not in doc, p  # a v1 group always creates the group
         for room in rooms_of(doc):
             name = room["name"]
             assert name in ROOMS or re.fullmatch(rf"work-({'|'.join(WORKFLOW_NAMES)})-\{{\$timestamp\}}", name), (p, name)
@@ -95,14 +95,14 @@ def test_every_workflow_has_brief_and_asker_params():
 
 def test_kickoff_addresses_exactly_one_role():
     for p in WORKFLOWS:
-        room = load(p)["rooms"][0]
-        mentions = set(re.findall(r"@([\w{}.-]+)", room["kickoff"]))
+        doc = load(p); room = doc["room"]
+        mentions = set(re.findall(r"@([\w{}.-]+)", doc["kickoff"]))
         assert len(mentions) == 1, (p, mentions)
         assert expand(mentions.pop()) <= {a for x in room["agents"] for a in expand(x)}, p
 
 
 def test_bug_fix_review_end_condition_mentions_asker():
-    room = load(ROOT / "workflows" / "bug-fix-review.yaml")["rooms"][0]
+    room = load(ROOT / "workflows" / "bug-fix-review.yaml")["room"]
     assert re.search(r"only \{asker\}.*approve", room["instructions"], re.S | re.I)
 
 

@@ -10,26 +10,24 @@ params:
   asker:
     type: user
     label: Asker
-group:
-  name: brightcart
-rooms:
-  - name: work-data-question-{$timestamp}
-    description: A data question for the data-steward.
-    channel_type: channel_private
-    agents: [mochi-data, chief]
-    users: ["{asker}"]
-    roles:
-      - name: data-steward
-        instructions: Answer with a table and a Mochi artifact link, then post DONE.
-    instructions: |
-      Data question from {asker}.
+room:
+  name: work-data-question-{$timestamp}
+  description: A data question for the data-steward.
+  channel_type: channel_private
+  agents: [mochi-data, chief]
+  users: ["{asker}"]
+  roles:
+    - name: data-steward
+      instructions: Answer with a table and a Mochi artifact link, then post DONE.
+  instructions: |
+    Data question from {asker}.
 
-      Brief:
-      {brief}
+    Brief:
+    {brief}
 
-      Steps:
-      1. The data-steward (mochi-data) answers in this thread: one line, a table, the Mochi artifact link, and the query.
-      2. The data-steward posts DONE on its own line. That ends the work.
-      3. Chief then restyles the answer for {asker} in the thread the question came from.
-    kickoff: |
-      @mochi-data you hold the data-steward role. Read the brief in the room instructions and answer it as your CLAUDE.md says. Post DONE when finished.
+    Steps:
+    1. The data-steward (mochi-data) answers in this thread: one line, a table, the Mochi artifact link, and the query.
+    2. The data-steward posts DONE on its own line. That ends the work. It does not @ anyone.
+    3. Chief then restyles the answer for {asker} in the thread the question came from.
+kickoff: |
+  @mochi-data take the data-steward role. Read the brief in the room instructions and answer it as your CLAUDE.md says. Post DONE when finished.

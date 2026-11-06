@@ -2,13 +2,13 @@
   "mcpServers": {
     "mochi-pm": {
       "type": "http",
-      "url": "${MOCHI_MCP_URL}",
-      "headers": { "Authorization": "Bearer ${MOCHI_TOKEN_PM}" }
+      "url": "${MOCHI_MCP_URL:-}",
+      "headers": { "Authorization": "Bearer ${MOCHI_TOKEN_PM:-}" }
     },
     "mochi-dev": {
       "type": "http",
-      "url": "${MOCHI_MCP_URL}",
-      "headers": { "Authorization": "Bearer ${MOCHI_TOKEN_DEV}" }
+      "url": "${MOCHI_MCP_URL:-}",
+      "headers": { "Authorization": "Bearer ${MOCHI_TOKEN_DEV:-}" }
     }
   }
 }
