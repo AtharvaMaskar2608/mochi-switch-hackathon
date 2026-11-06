@@ -1,4 +1,5 @@
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 import pytest
 
 from chief.approvals import Approvals
@@ -18,8 +19,11 @@ def _profile(root, slug, name, role, focus="[]", preapproved="[]"):
 
 
 class FakeWriter:
-    def __init__(self, answer=None):
-        self.answer, self.calls = answer, []
+    def __init__(self, answer=None, split=None):
+        self.answer, self.calls, self.split = answer, [], split
+
+    def split_requests(self, text):
+        return self.split or [text]
 
     def sanitize(self, t):
         return t.replace("@", "＠")
@@ -29,7 +33,7 @@ class FakeWriter:
         return f"brief for {template} from {sender.slug}"
 
     def restyle(self, answer, reader):
-        self.calls.append("restyle")
+        self.calls.append(("restyle", reader.slug))
         return f"styled: {answer}"
 
     def offer_line(self, msg, template):
@@ -125,11 +129,12 @@ def test_memory_hit_answers_directly_no_work_room(ctx):
 
 def test_non_urgent_question_to_meera_in_focus_is_held(ctx):
     acts = handle(msg("meera can you look at the refund rounding bug?"), ctx)
-    assert [k for k, _ in acts] == ["hold"] and acts[0][1]["for"] == "meera"
+    assert [k for k, _ in acts] == ["hold", "post"] and acts[0][1]["for"] == "meera"
     assert ctx.gate.calls == [("ravi", True)]
     c = FakeClient()
     apply(acts, c, ctx)
-    assert c.log == []  # nothing posted while she's in focus
+    assert c.log == [("post", "R", "Meera is heads-down until 15:00; I'll pass this on.")]  # nothing to meera
+    c.log.clear()
     ctx.ladder._now = lambda: NOON.replace(hour=16)
     release_held(c, ctx)
     assert c.log == [("target", "R", "ravi in product: meera can you look at the refund rounding bug?", ["meera"], None)]
@@ -353,3 +358,163 @@ def test_dream_action_routed_to_ticks(ctx, monkeypatch):
     monkeypatch.setattr(ticks, "apply_dream", lambda a, client, ctx: got.append(a))
     apply([("dream", {"rooms": ["R"], "room_id": "OPS"})], FakeClient(), ctx)
     assert got == [{"rooms": ["R"], "room_id": "OPS"}]
+
+
+# ---- Task J: story gaps ----
+
+def _open_room(ctx, template="data-question", asker="ravi", thread="M1"):
+    (ctx.workflows_dir / f"{template}.yaml").write_text(f"name: {template}\n")
+    apply([("open_work_room", {"template": template, "brief": "b", "asker": asker, "lead_role": "x",
+                               "room_id": "R", "thread_id": thread})], FakeClient(), ctx)
+
+
+def agent(body, sender="mochi-data", room="W1", addressed=False):
+    return msg(body, sender=sender, room=room, addressed=addressed, is_agent=True)
+
+
+def test_done_in_work_room_restyled_to_origin_thread(ctx):
+    ctx.gate = gate_of(template="data-question", fits=0.9)
+    acts = handle(replace(msg("where's the refunds data?"), message_id="M1"), ctx)
+    assert acts[0][1]["thread_id"] == "M1"  # the ask's own thread
+    apply(acts, FakeClient(), ctx)
+    assert ctx.origins["W1"]["room_id"] == "R" and ctx.origins["W1"]["thread_id"] == "M1"
+    assert handle(agent("refunds were 4.1% in October"), ctx) == []  # not DONE, not long: just noted
+    acts = handle(agent("DONE"), ctx)  # bare DONE: the thread's last agent reply is the answer
+    assert acts == [("post", {"room_id": "R", "body": "styled: refunds were 4.1% in October", "thread_id": "M1"})]
+    assert ("restyle", "ravi") in ctx.writer.calls  # in the asker's style
+    assert handle(agent("DONE"), ctx) == []  # answered once
+    assert handle(agent("DONE: mine", sender="reviewer"), ctx) == []  # only the lead's DONE counts
+    assert handle(agent("short note\nDONE"), ctx) == []  # DONE must start the message
+    acts = handle(agent("DONE: and 3.2% in September"), ctx)  # DONE with its own text
+    assert acts[0][1]["body"] == "styled: and 3.2% in September"
+
+
+def test_lead_agent_table_without_done_or_address_is_the_answer(ctx):
+    ctx.data_agent = "standin-data"
+    _open_room(ctx)
+    table = "| month | refunds |\n|---|---|\n| Oct | 4.1% |"
+    assert handle(agent(table, sender="reviewer"), ctx) == []  # not the room's lead
+    acts = handle(agent(table, sender="Standin data"), ctx)  # display name of the lead
+    assert acts == [("post", {"room_id": "R", "body": f"styled: {table}", "thread_id": "M1"})]
+    assert handle(agent(table, sender="standin-data", room="R"), ctx) == []  # agents elsewhere: still ignored
+    assert ctx.gate.calls == []
+
+
+def test_three_requests_open_three_work_rooms(ctx):
+    parts = ["what did we ship this week", "why did refunds jump", "fix the checkout bug"]
+    tpl = dict(zip(parts, ["shipped-digest", "data-question", "bug-fix-review"]))
+    ctx.gate = lambda m, *a: Decision(for_me=0.9, rung="act", template=tpl[m.body], fits=0.9, urgency=0.3)
+    ctx.writer = FakeWriter(split=parts)
+    body = "what did we ship this week, why did refunds jump, fix the checkout bug"
+    acts = handle(msg(body, sender="asha", addressed=True), ctx)
+    assert [k for k, _ in acts] == ["post", "open_work_room", "open_work_room", "open_work_room"]
+    assert acts[0][1]["body"] == "On it, 3 jobs: " + "; ".join(parts)
+    assert [a["template"] for _, a in acts[1:]] == ["shipped-digest", "data-question", "bug-fix-review"]
+
+
+def test_unaddressed_message_with_and_is_not_split(ctx):
+    ctx.writer = FakeWriter(split=["lunch at 1", "bring the deck"])
+    ctx.writer.split_requests = lambda text: pytest.fail("ambient chat must not be split")
+    ctx.gate = gate_of(for_me=0.1, rung="silent")
+    assert handle(msg("ravi, lunch at 1? and bring the deck", sender="asha"), ctx) == [("none", {})]
+    assert len(ctx.gate.calls) == 1  # one gate call per ambient message
+
+
+def test_summary_only_when_two_parts_act(ctx):
+    parts = ["why did refunds jump", "thanks for the deck", "also hi"]
+    tpl = {"why did refunds jump": "data-question"}
+    body = "why did refunds jump, thanks for the deck, also hi"
+
+    def gate(m, *a):
+        return Decision(for_me=0.9, rung="act" if m.body in tpl else "silent", template=tpl.get(m.body),
+                        fits=0.9, urgency=0.3)
+    ctx.gate = gate
+    ctx.writer = FakeWriter(split=parts)
+    acts = handle(msg(body, addressed=True), ctx)
+    assert [k for k, _ in acts] == ["open_work_room"]  # one part acts: just its output, no summary
+    tpl["thanks for the deck"] = "bug-fix-review"
+    acts = handle(msg(body, addressed=True), ctx)
+    assert [k for k, _ in acts] == ["post", "open_work_room", "open_work_room"]
+    assert acts[0][1]["body"] == "On it, 2 jobs: why did refunds jump; thanks for the deck"
+    tpl.clear()
+    assert handle(msg(body, addressed=True), ctx) == [("none", {})]  # none act: nothing extra
+
+
+def test_dev_asks_meera_in_focus_held_without_addressing_chief(ctx):
+    _profile(ctx.store.root, "dev", "Dev", "dev")
+    ctx.store.add("team", "team", "fact", "the refund rounding bug is tracked in BUG-12", {"by": "person"})
+    ctx.writer = FakeWriter(answer="it's tracked in BUG-12")
+    ctx.gate = gate_of(for_me=0.1, rung="silent", urgency=0.3)  # chat between people, can wait
+    m = replace(msg("meera is the refund rounding bug fixed?", sender="dev", room="ENG"), message_id="M7")
+    acts = handle(m, ctx)
+    assert acts[0] == ("hold", {"for": "meera", "item": {
+        "text": "dev in product: meera is the refund rounding bug fixed?", "room_id": "ENG", "thread_id": None}})
+    assert acts[1] == ("post", {"room_id": "ENG", "thread_id": "M7", "body":
+                                "Meera is heads-down until 15:00; I'll pass this on. Meanwhile: it's tracked in BUG-12"})
+    kinds = [[k for k, _ in handle(m, ctx)] for _ in range(3)]
+    assert kinds == [["hold", "post"], ["hold", "post"], ["hold"]]  # the reply is unprompted: capped; the hold is not
+    ctx.gate = gate_of(for_me=0.1, rung="silent", urgency=1.0)
+    assert handle(replace(m, room_id="ENG2"), ctx) == [("none", {})]  # urgent: not held
+
+
+def test_release_train_dry_run_after_release_owner_approves(ctx):
+    _open_room(ctx, "release-train")
+    assert ctx.origins["W1"]["lead"] is None  # ends in a dry run, not an answer
+    assert handle(agent("PASSED: no high findings", sender="security"), ctx) == []
+    notes = "@chief release notes for v1.4.2: refunds rounding fix. Touches 3 services and 1 migration."
+    acts = handle(agent(notes, sender="ship", addressed=True), ctx)
+    assert [k for k, _ in acts] == ["approval", "post"]
+    assert (acts[0][1]["action"], acts[0][1]["owner"]) == ("deploy", "meera")
+    code = _code(acts, ctx)
+    assert "no pending" in handle(msg(f"approve {code}", sender="ravi"), ctx)[0][1]["body"]
+    out = handle(msg(f"approve {code}", sender="meera"), ctx)
+    line = "would deploy v1.4.2 to staging: 3 services, 1 migrations"
+    assert out == [("post", {"room_id": "W1", "body": line, "thread_id": None}),
+                   ("post", {"room_id": "R", "body": line, "thread_id": "M1"})]  # posts only: nothing runs
+
+
+def test_release_owner_notified_in_origin_room(ctx):
+    _open_room(ctx, "release-train")
+    acts = handle(agent("@chief release notes for v1.4.2", sender="ship", addressed=True), ctx)
+    c = FakeClient()
+    apply(acts, c, ctx)
+    (kind, room, body, names, roles), note = c.log
+    assert (kind, room, names) == ("target", "R", ["meera"]) and "approve " in body  # origin room, targeted
+    assert note == ("post", "W1", "asked meera to approve the deploy in the requesting thread")
+
+
+def test_dry_run_line_fallbacks():
+    from chief.main import dry_run_line
+
+    assert dry_run_line("notes with nothing countable") == "would deploy vNEXT to staging: ? services, ? migrations"
+
+
+def test_non_hard_ask_first_becomes_offer(ctx):
+    ctx.gate = gate_of(rung="ask_first")  # a plain answer: not on the hard list
+    acts = handle(msg("@chief can you sort this out", addressed=True), ctx)
+    assert acts == [("post", {"room_id": "R", "body": "want me to take this?", "thread_id": None})]
+    assert ctx.approvals._pending == {}
+    ctx.gate = gate_of(rung="act", template="release-train", fits=0.9)  # hard: still an approval
+    assert [k for k, _ in handle(msg("@chief deploy it", addressed=True), ctx)] == ["approval"]
+
+
+def test_offers_expire_after_30_minutes(ctx):
+    clock = [NOON]
+    ctx.now = lambda: clock[0]
+    ctx.gate = gate_of(rung="offer", template="data-question", fits=0.9)
+    handle(msg("@chief where is the refunds data?", addressed=True), ctx)
+    ctx.gate = gate_of(rung="silent")
+    clock[0] = NOON + timedelta(minutes=31)
+    assert handle(msg("@chief yes", addressed=True), ctx) == [("none", {})]
+    assert ctx.offers == {}
+
+
+def test_yes_in_thread_matches_offer_on_root_message(ctx):
+    ctx.gate = gate_of(rung="offer", template="data-question", fits=0.9)
+    acts = handle(replace(msg("@chief where is the refunds data?", addressed=True), message_id="M1"), ctx)
+    assert acts[0][1]["thread_id"] == "M1"  # offered in the asker's thread
+    assert list(ctx.offers) == [("R", "M1", "ravi")]
+    ctx.gate = gate_of(rung="silent")
+    assert handle(replace(msg("@chief yes", addressed=True), thread_id="OTHER", message_id="M2"), ctx) == [("none", {})]
+    yes = replace(msg("@chief yes", addressed=True), thread_id="M1", message_id="M3")
+    assert [k for k, _ in handle(yes, ctx)] == ["open_work_room"]

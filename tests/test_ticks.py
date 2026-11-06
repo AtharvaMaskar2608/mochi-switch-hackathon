@@ -93,3 +93,41 @@ def test_tick_loop_fires_after_post_and_survives_fire_error(capsys):
               stop=lambda: n[0] >= 2, on_fire=on_fire)
     assert sorted(fired) == ["dream", "morning"]  # once each: a failed fire is not retried
     assert "writer down" in capsys.readouterr().err
+
+
+def test_restart_does_not_refire_a_slot_done_today(tmp_path):
+    path = tmp_path / ".chief-ticks.json"
+    posts = []
+
+    def run(t):
+        n = [0]
+        tick_loop(SimpleNamespace(post=lambda room, body: posts.append(body)), "ops", now=lambda: t,
+                  sleep=lambda _: n.__setitem__(0, 1), stop=lambda: n[0] >= 1, state_path=path)
+
+    run(at(FRI, 9, 5))
+    assert sorted(posts) == ["[tick] dream", "[tick] morning"]
+    assert path.stat().st_mode & 0o777 == 0o600
+    run(at(FRI, 9, 30))  # a restart, same day
+    assert len(posts) == 2
+    run(at(FRI, 18, 1))  # later slots still fire
+    assert sorted(posts[2:]) == ["[tick] evening", "[tick] friday-digest"]
+
+
+def test_held_brief_failure_reholds_that_group_only(capsys):
+    from chief.models import Profile
+    from chief.ticks import held_actions
+
+    def brief(items, p):
+        if p.slug == "meera":
+            raise RuntimeError("haiku down")
+        return "; ".join(items)
+
+    item = {"text": "ravi: ping", "room_id": "R1", "thread_id": None}
+    released = {"meera": [item], "dev": [{"text": "asha: deck?", "room_id": "R2", "thread_id": None}]}
+    profiles = {s: Profile(s, s.title(), "dev", "plain") for s in ("meera", "dev")}
+    ladder = Ladder()
+    out = held_actions(released, profiles, SimpleNamespace(batched_brief=brief), ladder)
+    assert out == [("target", {"room_id": "R2", "names": ["dev"], "roles": None, "thread_id": None,
+                               "body": "asha: deck?"})]
+    assert ladder.release_due(profiles) == {"meera": [item]}  # held again, not lost
+    assert "haiku down" in capsys.readouterr().err

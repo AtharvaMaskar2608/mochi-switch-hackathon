@@ -199,7 +199,7 @@ class SwitchClient:
         return Msg(
             room_id=d["room_id"], room_name=self._room_names.get(d["room_id"], d["room_id"]), sequence=d["sequence"],
             sender=sender, sender_name=p.get("sender_name", sender), body=p.get("body", ""),
-            thread_id=p.get("thread_id"), addressed=bool(p.get("addressed")),
+            thread_id=p.get("thread_id"), addressed=bool(p.get("addressed")), message_id=p.get("message_id"),
             # ponytail: "@switch-agent-…" id shape is a convention, not guaranteed by the protocol
             is_agent=sender in self._agent_ids or sender.startswith("@switch-agent"), ts=ts)
 
@@ -208,7 +208,7 @@ class SwitchClient:
         return self.http.post(f"{self.base}/ops/{name}", headers={
             **self.headers, "X-Switch-Connection-Id": self.connection_id}, json=args)
 
-    def op(self, name: str, **args):
+    def op(self, name: str, /, **args):  # positional-only: ops take a `name` argument too
         if not self._ready.is_set() and threading.current_thread() is not self._thread:
             self.start()  # ops need a live stream on the connection
         for attempt in (0, 1):

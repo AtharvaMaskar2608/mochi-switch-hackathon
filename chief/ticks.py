@@ -1,8 +1,11 @@
 """Timer ticks: Chief posts `[tick] <kind>` into #chief-ops (a visible log), then runs on_tick in-process."""
 import dataclasses
+import json
+import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -33,9 +36,23 @@ def due(now: datetime, last: dict[str, datetime]) -> list[str]:
     return out
 
 
+def load_last(path: Path | None) -> dict[str, datetime]:
+    """Fired times saved by a previous run, so a restart never re-fires a slot already done."""
+    try:
+        return {k: datetime.fromisoformat(v) for k, v in json.loads(path.read_text()).items()}
+    except Exception:  # no file yet, or unreadable: start fresh
+        return {}
+
+
+def save_last(path: Path, last: dict[str, datetime]) -> None:
+    path.touch(mode=0o600)
+    os.chmod(path, 0o600)
+    path.write_text(json.dumps({k: v.isoformat() for k, v in last.items()}))
+
+
 def tick_loop(client, chief_ops_room_id: str, now=lambda: datetime.now(IST), sleep=time.sleep,
-              every: float = 30, stop=lambda: False, on_fire=lambda kind: None) -> None:
-    last: dict[str, datetime] = {}
+              every: float = 30, stop=lambda: False, on_fire=lambda kind: None, state_path: Path | None = None) -> None:
+    last = load_last(state_path) if state_path else {}
     while not stop():
         t = now()
         for kind in due(t, last):
@@ -49,19 +66,32 @@ def tick_loop(client, chief_ops_room_id: str, now=lambda: datetime.now(IST), sle
                 on_fire(kind)
             except Exception as e:
                 print(f"tick {kind}: {type(e).__name__}: {e}", file=sys.stderr)
+            try:
+                if state_path:
+                    save_last(state_path, last)
+            except OSError as e:  # unsaved: a restart may re-fire this slot, nothing worse
+                print(f"tick state: {type(e).__name__}: {e}", file=sys.stderr)
         sleep(every)
 
 
-def held_actions(released: dict[str, list[dict]], profiles: dict, writer) -> list:
-    """One batched brief per (person, room): a held item only ever goes back to the room it came from."""
+def held_actions(released: dict[str, list[dict]], profiles: dict, writer, ladder) -> list:
+    """One batched brief per (person, room): a held item only ever goes back to the room it came from.
+    A brief that fails puts its group back on hold, so nothing is lost and the other groups still go."""
     out = []
     for slug, items in released.items():
         by_room: dict[str, list[dict]] = {}
         for i in items:
             by_room.setdefault(i["room_id"], []).append(i)
         for room_id, group in by_room.items():
+            try:
+                body = writer.batched_brief([i["text"] for i in group], profiles[slug])
+            except Exception as e:
+                print(f"held brief for {slug}: {type(e).__name__}: {e}", file=sys.stderr)
+                for i in group:
+                    ladder.hold(slug, i)
+                continue
             out.append(("target", {"room_id": room_id, "names": [slug], "roles": None, "thread_id": None,
-                                   "body": writer.batched_brief([i["text"] for i in group], profiles[slug])}))
+                                   "body": body}))
     return out
 
 
@@ -84,7 +114,7 @@ def on_tick(kind: str, ctx) -> list:
         root = ctx.store.root / "people"
         people = [ctx.store.profile(p.name) for p in sorted(root.glob("*")) if p.is_dir()] if root.exists() else []
         profiles = {p.slug: dataclasses.replace(p, focus=[]) for p in people}
-        return held_actions(ctx.ladder.release_due(profiles), profiles, ctx.writer)
+        return held_actions(ctx.ladder.release_due(profiles), profiles, ctx.writer, ctx.ladder)
     return []
 
 

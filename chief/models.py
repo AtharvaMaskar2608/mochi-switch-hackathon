@@ -17,6 +17,7 @@ class Msg:
     addressed: bool
     is_agent: bool
     ts: str
+    message_id: str | None = None  # this message's own id: the thread root when it starts one
 
 
 @dataclass
