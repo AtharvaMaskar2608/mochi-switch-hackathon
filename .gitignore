@@ -9,3 +9,5 @@ __pycache__/
 .claude/
 .local-test-users.json
 .local-*.env
+.switch/
+.run/

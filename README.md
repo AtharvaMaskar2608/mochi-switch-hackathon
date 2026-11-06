@@ -154,25 +154,47 @@ Glossary: GMV is gross merchandise value before refunds; AOV is average order va
 
 ## Reproduce it
 
-**Prerequisites:** Docker Desktop, [`just`](https://github.com/casey/just), [`uv`](https://docs.astral.sh/uv/), Python 3.12, and a local checkout of Switch whose path is in `SWITCH_DIR`. The Switch server needs `FEATURE_FLAGS_ENABLED=agent_management,service_connections`.
+This reproduces story 1 on Switch's bundled Mattermost. The only thing you supply is an API key.
 
-**Keys:** in `.env` (copy it from `.env.example`):
+**Prerequisites:** Docker (running), [`just`](https://github.com/casey/just), [`uv`](https://docs.astral.sh/uv/), Node, git, openssl, curl and perl.
+
+**Keys:** in `.env`. If it is missing, `up.sh` copies it from `.env.example`.
 
 | Key | Needed for |
 |---|---|
-| `ANTHROPIC_API_KEY` | Chief's briefs and restyles, the dreamer, the org factory, the stand-in data agent |
-| `TYPESAFE_API_KEY` | The Jev gate, one call per message |
+| `ANTHROPIC_API_KEY` (required) | Chief's briefs and restyles, the dreamer, the org factory, the stand-in data agent |
+| `TYPESAFE_API_KEY` (optional) | The Jev gate, one call per message. Without it Chief gates with Claude and never acts on its own: it offers, and you reply "yes" |
 
-There is no fake mode. Both keys are required. Mochi, design-agent and the cyber-security scanner are optional. The judge path uses the bundled stand-in data agent instead of Mochi.
+Mochi, design-agent and the cyber-security scanner are not needed. The judge path uses the bundled stand-in data agent instead of Mochi.
 
 ```bash
 git clone <this repo> chief && cd chief
-cp .env.example .env            # add ANTHROPIC_API_KEY and TYPESAFE_API_KEY
-export SWITCH_DIR=/path/to/switch
-bash scripts/up.sh
+cp .env.example .env            # add ANTHROPIC_API_KEY (and TYPESAFE_API_KEY if you have one)
+bash scripts/up.sh              # if a local Postgres holds 5432: SWITCH_DB_PORT=5434 bash scripts/up.sh
 ```
 
-`scripts/up.sh` starts Switch with Mattermost and registers Chief and the connectors. It builds the stand-in SQLite database (`uv run python -m connectors.standin_data --init`), launches `org/brightcart-org.yaml`, and starts `chief`, `connectors.security`, `connectors.standin_data` and `mochi_bridge` in the background. It ends by printing the Mattermost URL and three things to type.
+What `scripts/up.sh` does, in order:
+
+1. It checks the prerequisites, loads `.env`, and stops if `ANTHROPIC_API_KEY` is empty.
+2. It uses the Switch checkout in `SWITCH_DIR`. The default is `./.switch`, which it clones from `https://github.com/sandbox-quantum/switch` if it is missing.
+3. In the Switch checkout, it runs `just init-env` once. That writes Switch's `.env` with fresh secrets. Then `up.sh` sets `FEATURE_FLAGS_ENABLED=agent_management,service_connections`, and adds a random `CONTROLLER_TOKEN_SECRET` if there is none. If `SWITCH_DB_PORT` is set, it writes `DB_PORT` and moves the Postgres host port in `deploy/local/docker-compose.yml` to match, because that file pins 5432.
+4. It starts Switch, unless something already answers on `:8000/health`. It runs `just up` (Postgres and Mattermost), then `just migrate`, then `just run` in the background. Then it waits for the core and for Mattermost.
+5. It runs `uv run python scripts/setup_demo.py`. Each step is skipped if it is already done, so a second run changes nothing. `--dry-run` lists what it would do. Logged in as the gateway admin from Switch's `.env`, it:
+   - creates a personal registration key, `chief-hackathon-local`, and saves it to `.local-switch.env`. Agents registered with this key have an owner, and an agent needs an owner to open rooms.
+   - creates the Mattermost users `asha`, `ravi`, `meera` and `dev` and the matching Switch users, then links each pair. To link a pair, it claims the identity as that person and posts the one-time `!link-account` code from their Mattermost account. Generated passwords go to `.local-test-users.json` (mode 600).
+   - registers `chief` and `standin-data`, and saves their keys to `.chief.json` and `.connector-standin-data.json` (mode 600).
+   - launches `org/brightcart-org.yaml`, filling Chief's slot with the existing `chief`. The specialist agents (`mochi-data`, `ship`, `reviewer`, `sre`, the interns) can't start without a Switch Console machine. If the full launch fails for that reason (`machine_unresolved` or `agents_not_created`), the script launches the same group, rooms, people, roles and docs with Chief as the only agent, and says so in one line. Story 1 doesn't need the specialists. Any other error stops the script.
+   - sets Chief's addressing policy: its owner, plus anyone in a `brightcart` room. A filled slot ignores the template's `anyone_in`, so the script sets this itself.
+   - builds the stand-in SQLite database, `sample/brightcart.db`.
+6. It starts `connectors.standin_data` and `chief` in the background (`chief` with `CHIEF_DATA_AGENT=standin-data`), with logs in `.run/`.
+7. It prints the Mattermost URL (`http://localhost:8065`), ravi's login, and the three things to type:
+   1. As `ravi`, in `product`, type `@chief where is the refunds data and what did it do last month?`
+   2. Without Jev, Chief offers to open a data-question room. Reply `yes` in its thread.
+   3. Open the new `work-data-question-…` channel. Chief's brief is there, followed by `standin-data`'s answer table.
+
+`bash scripts/down.sh` stops chief, standin-data and Switch core. Before it kills anything, it checks that each pidfile still names that process, and it removes a stale pidfile without touching the process. If `up.sh` started Switch's containers, it then runs `just down`, which keeps the data volumes. If Switch was already running, it's left alone. The API keys in `.env` go only to chief and standin-data, never to Switch. The scripts never print a secret. The admin logins stay in Switch's `.env`, and the test users' logins are in `.local-test-users.json`.
+
+On Apple Silicon, Mattermost runs under amd64 emulation, and it crashed once in testing. If that happens, run `bash scripts/up.sh` again.
 
 Tests do not touch the network: `uv sync && uv run pytest`.
 
