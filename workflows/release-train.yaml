@@ -1,0 +1,45 @@
+# Release train: reviewer, security gate, release notes, release-owner approval, then a dry run only.
+version: 1
+params:
+  brief:
+    type: string
+    multiline: true
+    label: Release brief
+    description: The repo, the version, and the range to release.
+  asker:
+    type: user
+    label: Asker
+room:
+  name: work-release-train-{$timestamp}
+  description: Review, security gate, notes, approval and a dry run. Nothing is deployed.
+  channel_type: channel_private
+  agents: [reviewer, security, ship, chief]
+  users: ["{asker}"]
+  roles:
+    - name: reviewer
+      instructions: Review the release range, then address @security.
+    - name: security
+      instructions: Run the security code gate, then address @ship if PASSED.
+    - name: release-scribe
+      instructions: Write the release notes, then address @chief.
+    - name: release-owner
+      exclusive: true
+      instructions: Approves the release before the dry run.
+    - name: deployer
+      instructions: Chief posts the dry run result. Nothing is deployed.
+  instructions: |
+    Release train for {asker}.
+
+    Brief:
+    {brief}
+
+    Steps, in order. Each agent addresses the next one by name when its step is done:
+    1. reviewer reviews the release range. When ready, it addresses @security. If it blocks, it says why and addresses nobody.
+    2. security runs the code gate. On PASSED it addresses @ship. On FAILED it says why and addresses nobody.
+    3. ship (release-scribe) writes the release notes, then addresses @chief.
+    4. chief asks the release-owner for approval and waits for it.
+    5. After approval, chief posts the dry-run line: "would deploy vX to staging: N services, M migrations". Nothing is deployed and no deploy command is run.
+
+    Ends when chief posts the dry-run line.
+kickoff: |
+  @reviewer take the reviewer role. Read the brief in the room instructions and review the release range. When ready, address security next, as the room instructions say.

@@ -1,0 +1,164 @@
+# Brightcart org: one group, four rooms, the standing agents and the room roles.
+# Launch with create_room_from_yaml (or the gateway "from YAML") on a server with agent management.
+version: 2
+params:
+  repo_dir:
+    type: directory
+    label: Chief repo directory
+    description: Absolute path of this repo on the machine; agents work in {repo_dir}/agents/<name>.
+  machine:
+    type: machine
+    default: [$first]
+    input: advanced
+resources:
+  brightcart:
+    type: group
+    name: brightcart
+    description: Brightcart, the demo company.
+
+  # --- agents -------------------------------------------------------------
+  chief:
+    type: agent
+    name: chief
+    display_name: Chief
+    allow_existing: true  # Chief is a custom always_on agent that already exists
+    instructions: Chief, the chief of staff. Runs outside Switch's managed agents; fill this slot with the existing agent.
+    provider: claude
+    machine: "{machine}"
+    directory: "{repo_dir}"
+    addressing:
+      anyone_in: [product, leadership, eng, chief_ops]
+  mochi_data:
+    type: agent
+    name: mochi-data
+    display_name: Mochi data
+    description: Answers data questions through Mochi.
+    instructions: Follow CLAUDE.md in your directory.
+    provider: claude
+    machine: "{machine}"
+    directory: "{repo_dir}/agents/mochi-data"
+    addressing: owner-agents
+  ship:
+    type: agent
+    name: ship
+    display_name: Ship
+    description: Writes the weekly shipped digest from GitHub.
+    instructions: Follow CLAUDE.md in your directory.
+    provider: claude
+    machine: "{machine}"
+    directory: "{repo_dir}/agents/ship"
+    connections: [github]
+    addressing: owner-agents
+  reviewer:
+    type: agent
+    name: reviewer
+    display_name: Reviewer
+    description: Reviews branches and pull requests.
+    instructions: Follow CLAUDE.md in your directory.
+    provider: claude
+    machine: "{machine}"
+    directory: "{repo_dir}/agents/reviewer"
+    connections: [github]
+    addressing: owner-agents
+  sre:
+    type: agent
+    name: sre
+    display_name: SRE
+    description: First pass on incidents; read only.
+    instructions: Follow CLAUDE.md in your directory.
+    provider: claude
+    machine: "{machine}"
+    directory: "{repo_dir}/agents/sre"
+    addressing: owner-agents
+  # Interns are owned by the deploying admin (the schema has no owner field); Chief enforces who the approver is.
+  intern_meera:
+    type: agent
+    name: intern-meera
+    display_name: Intern (Meera)
+    description: Meera's intern; fixes bugs on a branch.
+    instructions: Follow CLAUDE.md in your directory.
+    provider: claude
+    machine: "{machine}"
+    directory: "{repo_dir}/agents/intern-meera"
+    connections: [github]
+    auto_mode: false  # approval cards appear
+    addressing: owner-agents
+  intern_dev:
+    type: agent
+    name: intern-dev
+    display_name: Intern (Dev)
+    description: Dev's intern; fixes bugs on a branch.
+    instructions: Follow CLAUDE.md in your directory.
+    provider: claude
+    machine: "{machine}"
+    directory: "{repo_dir}/agents/intern-dev"
+    connections: [github]
+    auto_mode: false
+    addressing: owner-agents
+
+  # --- rooms --------------------------------------------------------------
+  product:
+    type: room
+    group: brightcart
+    name: product
+    description: Product questions and data.
+    agents: [chief, mochi_data]
+    users: [asha, ravi]
+    roles:
+      - name: data-steward
+        instructions: Answers data questions with a table and a Mochi artifact link, then posts DONE.
+    docs:
+      - name: Team knowledge
+        description: Standing knowledge for this room.
+        content: "(placeholder: the dreamer replaces this)"
+  leadership:
+    type: room
+    group: brightcart
+    name: leadership
+    description: Leadership updates and digests.
+    agents: [chief, ship]
+    users: [asha, ravi]
+    roles:
+      - name: release-scribe
+        instructions: Writes the shipped digest and release notes, then posts DONE.
+      - name: video
+        instructions: Makes the short video for a digest, when asked.
+    docs:
+      - name: Team knowledge
+        description: Standing knowledge for this room.
+        content: "(placeholder: the dreamer replaces this)"
+  eng:
+    type: room
+    group: brightcart
+    name: eng
+    description: Engineering.
+    agents: [chief, reviewer, sre, intern_meera, intern_dev]
+    users: [ravi, meera, dev]
+    roles:
+      - name: on-call
+        exclusive: true
+        instructions: Takes the first look at incidents and alerts. One holder at a time.
+      - name: release-owner
+        exclusive: true
+        instructions: Approves a release before the deployer dry run. One holder at a time.
+      - name: reviewer
+        instructions: Reviews branches and pull requests against the brief.
+      - name: security
+        instructions: Runs the security code gate on a release.
+      - name: deployer
+        instructions: Runs the deploy dry run. Never deploys for real.
+    docs:
+      - name: Team knowledge
+        description: Standing knowledge for this room.
+        content: "(placeholder: the dreamer replaces this)"
+  chief_ops:
+    type: room
+    group: brightcart
+    name: chief-ops
+    description: Chief's own control room; ticks and approvals.
+    agents: [chief]
+    users: [asha, ravi, meera, dev]
+    docs:
+      - name: Team knowledge
+        description: Standing knowledge for this room.
+        content: "(placeholder: the dreamer replaces this)"

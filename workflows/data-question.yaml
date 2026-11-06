@@ -1,0 +1,33 @@
+# Data question: the data-steward answers with a table plus a Mochi artifact link.
+# Chief's open_work_room loads this and passes inputs {brief, asker}.
+version: 1
+params:
+  brief:
+    type: string
+    multiline: true
+    label: Question
+    description: The data question, with the time range and the token (PM or DEV) to use.
+  asker:
+    type: user
+    label: Asker
+room:
+  name: work-data-question-{$timestamp}
+  description: A data question for the data-steward.
+  channel_type: channel_private
+  agents: [mochi-data, chief]
+  users: ["{asker}"]
+  roles:
+    - name: data-steward
+      instructions: Answer with a table and a Mochi artifact link, then post DONE.
+  instructions: |
+    Data question from {asker}.
+
+    Brief:
+    {brief}
+
+    Steps:
+    1. The data-steward (mochi-data) answers in this thread: one line, a table, the Mochi artifact link, and the query.
+    2. The data-steward posts DONE on its own line. That ends the work. It does not @ anyone.
+    3. Chief then restyles the answer for {asker} in the thread the question came from.
+kickoff: |
+  @mochi-data take the data-steward role. Read the brief in the room instructions and answer it as your CLAUDE.md says. Post DONE when finished.
