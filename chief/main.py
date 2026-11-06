@@ -50,6 +50,8 @@ class Ctx:
     templates: list[str]
     roles: list[str]
     self_name: str = "chief"
+    release_owner: str = "meera"  # owns deploy approvals
+    org_admin: str = "asha"  # owns create_agent approvals
     gate: Callable = decide
     writer: Any = writer
     on_tick: Callable[[str, "Ctx"], list[Action]] = lambda kind, ctx: []  # Task 10
@@ -89,8 +91,9 @@ def _command(cmd: commands.Command, msg: Msg, slug: str, ctx: Ctx) -> list[Actio
         on = cmd.kind == "quiet_on"
         ctx.ladder.quiet(msg.room_id, on)
         return [_post(msg, "ok, quiet here until !quiet off" if on else "ok, back to normal here")]
+    person = not msg.is_agent and ctx.store.profile(slug).role != "unknown"
     if cmd.kind == "tick":
-        return ctx.on_tick(cmd.arg, ctx)
+        return ctx.on_tick(cmd.arg, ctx) if person else []
     if cmd.kind == "remember":
         return [("remember", {"owner": slug, "text": cmd.arg, "room_name": msg.room_name,
                               "room_id": msg.room_id, "thread_id": msg.thread_id})]
@@ -99,7 +102,9 @@ def _command(cmd: commands.Command, msg: Msg, slug: str, ctx: Ctx) -> list[Actio
         if not item_id:
             return [_post(msg, "I couldn't find that in memory")]
         return [("forget", {"id": item_id, "room_id": msg.room_id, "thread_id": msg.thread_id})]
-    # approve / deny
+    # approve / deny: only a known person, never an agent or unlinked account
+    if not person:
+        return [_post(msg, "only a teammate can approve or deny")]
     payload = ctx.approvals.resolve(cmd.arg, slug, cmd.kind == "approve")
     if payload is None:
         return [_post(msg, f"no pending approval {cmd.arg} for {slug}")]
@@ -151,20 +156,37 @@ def handle(msg: Msg, ctx: Ctx) -> list[Action]:
         return []
 
 
+TEAMMATE_MUST_ASK = "a teammate needs to ask for that one"
+VISIBLE = {"post", "target", "approval", "open_work_room"}
+
+
 def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
-    if tick := re.fullmatch(r"\[tick\]\s+(\S+)", msg.body.strip()):  # timer posts, possibly as chief itself
-        return ctx.on_tick(tick[1], ctx)
+    tick = re.fullmatch(r"\[tick\]\s+(\S+)", msg.body.strip())
     if ctx.self_name in (msg.sender, msg.sender_name.lower()):
-        return []
+        return ctx.on_tick(tick[1], ctx) if tick else []  # only Chief's own timer posts run ticks
     if msg.is_agent and not msg.addressed:
         return []
+    if tick:
+        return []  # a [tick] body from anyone else is ignored
     slug = msg.sender_name.lower()
     if cmd := commands.parse(msg.body):
         return _command(cmd, msg, slug, ctx)
+    if not msg.addressed and ctx.ladder.is_quiet(msg.room_id):
+        return [("none", {})]  # skip gate/writer calls whose output would be dropped anyway
+    acts = _decide(msg, slug, ctx)
+    if not msg.addressed and any(k in VISIBLE for k, _ in acts) and not ctx.ladder.allow_unprompted(msg.room_id):
+        return [("none", {})]  # unprompted: 3 per room per hour, nothing in quiet rooms
+    return acts
+
+
+def _decide(msg: Msg, slug: str, ctx: Ctx) -> list[Action]:
+    sender = ctx.store.profile(slug)
+    person = not msg.is_agent and sender.role != "unknown"  # only known people may start approvals
     if msg.room_id in ctx.work_rooms and MERGE_RE.search(msg.body):
+        if not person:
+            return [_post(msg, TEAMMATE_MUST_ASK)]
         return [_approval(msg, ctx.work_rooms[msg.room_id], "merge", "bug-fix-review")]
 
-    sender = ctx.store.profile(slug)
     focused = _recipient_in_focus(msg, ctx, slug)
     d = ctx.gate(msg, sender, focused is not None, ctx.templates, ctx.roles)
     if not msg.addressed and d.for_me <= FOR_ME_NO:
@@ -177,12 +199,13 @@ def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
     if focused and d.urgency < URGENT:
         return [("hold", {"for": focused.slug, "room_id": msg.room_id,
                           "item": f"{msg.sender_name} in {msg.room_name}: {msg.body}"})]
+    if rung == "ask_first" and not person:
+        return [_post(msg, TEAMMATE_MUST_ASK)]  # capped at offer: no self-owned approvals
     if rung == "offer":
-        if not msg.addressed and not ctx.ladder.allow_unprompted(msg.room_id):
-            return [("none", {})]
         return [_post(msg, ctx.writer.offer_line(msg, template))]
     if rung == "ask_first":
-        return [_approval(msg, slug, action, template)]
+        owner = {"deploy": ctx.release_owner, "create_agent": ctx.org_admin}.get(action, slug)
+        return [_approval(msg, owner, action, template)]
     return _act(msg, sender, template, ctx)
 
 

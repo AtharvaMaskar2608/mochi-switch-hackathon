@@ -79,6 +79,7 @@ def ctx(tmp_path):
     mem = tmp_path / "memory"
     _profile(mem, "ravi", "Ravi", "pm")
     _profile(mem, "meera", "Meera", "dev", focus='["10:00-15:00"]')
+    _profile(mem, "asha", "Asha", "ceo")
     (mem / "team" / "items").mkdir(parents=True)
     wf = tmp_path / "workflows"
     wf.mkdir()
@@ -159,8 +160,65 @@ def test_create_agent_always_asks_then_calls_factory(ctx):
     assert [k for k, _ in acts] == ["approval"]
     c = FakeClient()
     apply(acts, c, ctx)
+    assert acts[0][1]["owner"] == "asha"  # org admin, not the requester
     code = c.log[0][2].split("approve ")[1][:4]
-    assert handle(msg(f"approve {code}"), ctx)[0][1]["body"] == "factory not installed"
+    assert "no pending" in handle(msg(f"approve {code}"), ctx)[0][1]["body"]  # ravi asked, can't approve
+    assert handle(msg(f"approve {code}", sender="asha"), ctx)[0][1]["body"] == "factory not installed"
+
+
+def _code(acts, ctx):
+    c = FakeClient()
+    apply(acts, c, ctx)
+    return c.log[0][2].split("approve ")[1][:4]
+
+
+def test_agent_cannot_self_approve_create_agent(ctx):
+    ctx.gate = gate_of(template="org-team", fits=0.9)
+    agent = dict(sender="mochi-data", addressed=True, is_agent=True)
+    acts = handle(msg("make us a support team", **agent), ctx)
+    assert [k for k, _ in acts] == ["post"] and "teammate" in acts[0][1]["body"]
+    code = _code(handle(msg("make us a support team", addressed=True), ctx), ctx)  # ravi asks; asha owns
+    ctx.org_admin = "mochi-data"  # even if it somehow owned one, an agent can't approve
+    code2 = _code(handle(msg("make us a support team", addressed=True), ctx), ctx)
+    for c in (code, code2):
+        assert handle(msg(f"approve {c}", **agent), ctx)[0][1]["body"] == "only a teammate can approve or deny"
+
+
+def test_unknown_sender_cannot_create_approval(ctx):
+    ctx.gate = gate_of(template="org-team", fits=0.9)
+    acts = handle(msg("make us a support team", sender="stranger", addressed=True), ctx)
+    assert [k for k, _ in acts] == ["post"] and "teammate" in acts[0][1]["body"]
+    ctx.work_rooms["W1"] = "meera"
+    assert [k for k, _ in handle(msg("ship it", sender="stranger", room="W1", addressed=True), ctx)] == ["post"]
+    assert "only a teammate" in handle(msg("approve ABCD", sender="stranger"), ctx)[0][1]["body"]
+
+
+def test_deploy_approval_owned_by_release_owner(ctx):
+    ctx.gate = gate_of(template="release-train", fits=0.9)
+    acts = handle(msg("deploy the refunds fix", addressed=True), ctx)
+    assert [k for k, _ in acts] == ["approval"]
+    assert (acts[0][1]["action"], acts[0][1]["owner"]) == ("deploy", "meera")
+
+
+def test_tick_from_person_ignored(ctx):
+    seen = []
+    ctx.on_tick = lambda kind, c: seen.append(kind) or []
+    assert handle(msg("[tick] dream"), ctx) == []
+    assert handle(msg("[tick] dream", sender="mochi-data", is_agent=True), ctx) == []
+    assert handle(msg("[tick] dream", sender="mochi-data", is_agent=True, addressed=True), ctx) == []
+    handle(msg("!tick dream", sender="stranger"), ctx)
+    assert seen == [] and ctx.gate.calls == []
+
+
+def test_unaddressed_act_respects_quiet_and_cap(ctx):
+    ctx.store.add("team", "team", "fact", "refunds data lives in the orders_refunds table", {"by": "person"})
+    ctx.writer = FakeWriter(answer="it's in orders_refunds")
+    ctx.ladder.quiet("R", True)
+    assert handle(msg("where's the refunds data?"), ctx) == [("none", {})]
+    ctx.ladder.quiet("R", False)
+    kinds = [handle(msg("where's the refunds data?"), ctx)[0][0] for _ in range(4)]
+    assert kinds == ["post", "post", "post", "none"]
+    assert handle(msg("where's the refunds data?", addressed=True), ctx)[0][0] == "post"  # asked directly: no cap
 
 
 def test_quiet_room_offer_suppressed(ctx):
