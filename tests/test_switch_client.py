@@ -1,0 +1,161 @@
+import json
+import time
+from itertools import islice
+
+import httpx
+
+from chief.switch_client import SwitchClient
+
+
+def frame(kind, d, seq=None):
+    return (f"id: {seq}\n" if seq else "") + f"event: {kind}\ndata: {json.dumps(d)}\n\n"
+
+
+STATE = frame("connection_state", {"heartbeat_interval_seconds": 3600, "rooms": ["R"]})
+
+
+def msg(seq, room="R", body="hi"):
+    return frame("message", {"type": "message", "room_id": room, "sequence": seq, "payload": {
+        "addressed": True, "sender": "@switch-user-1:x", "sender_name": "ravi", "body": body,
+        "timestamp": 1700000000000, "thread_id": None}}, seq)
+
+
+def client(*streams):
+    streams = list(streams)
+    seen = []
+
+    def handler(req: httpx.Request):
+        seen.append(req)
+        if req.url.path.endswith("/events"):
+            return httpx.Response(200, content=(streams.pop(0) if streams else "").encode(),
+                                  headers={"content-type": "text/event-stream"})
+        if req.url.path.endswith("/ops/list_rooms"):
+            return httpx.Response(200, json={"result": [{"room_id": "R", "name": "#product"}]})
+        return httpx.Response(200, json={"result": {"ok": True}})
+
+    c = SwitchClient("http://s", "key", "a1", http=httpx.Client(transport=httpx.MockTransport(handler)),
+                     retry_delay=0)
+    return c, seen
+
+
+def test_parses_message_frame():
+    c, _ = client(": keepalive\n\n" + STATE + msg(7))
+    m = next(c.events())
+    c.close()
+    assert (m.body, m.sequence, m.room_id, m.room_name, m.sender_name, m.addressed, m.is_agent) == \
+        ("hi", 7, "R", "#product", "ravi", True, False)
+
+
+def test_skips_duplicate_sequence():
+    c, seen = client(STATE + msg(7), STATE + msg(7) + msg(8, body="b"))
+    got = [m.sequence for m in islice(c.events(), 2)]
+    c.close()
+    assert got == [7, 8]
+    ev = [r for r in seen if r.url.path.endswith("/events")]
+    assert ev[1].headers["last-event-id"] == "7"
+    assert ev[0].url.params["connection_id"] == ev[1].url.params["connection_id"]
+
+
+def test_gap_frame_marks_room():
+    c, _ = client(STATE + frame("gap", {"from_sequence": 1, "resumed_at": 5, "reason": "x"}) + msg(9))
+    next(c.events())
+    c.close()
+    assert "R" in c.gap_rooms
+
+
+def test_op_sends_connection_header():
+    c, seen = client(STATE)
+    c.op("post_message", body="x")
+    c.close()
+    r = [x for x in seen if "/ops/" in x.url.path][-1]
+    assert r.headers["x-switch-connection-id"] == c.connection_id
+    assert json.loads(r.content) == {"body": "x"}
+
+
+def test_gap_with_lower_sequence_resumes():
+    gap = frame("gap", {"from_sequence": 50, "resumed_at": 3, "reason": "restart"})
+    c, _ = client(STATE + msg(50), STATE + gap + msg(3, room="R2"))
+    got = list(islice(c.events(), 2))
+    c.close()
+    assert [m.sequence for m in got] == [50, 3]
+    assert {"R", "R2"} <= c.gap_rooms  # covered rooms plus the message's room
+
+
+def _wait(cond, t=2.0):
+    end = time.time() + t
+    while time.time() < end and not cond():
+        time.sleep(0.01)
+    return cond()
+
+
+def test_heartbeat_fires_at_interval():
+    state = frame("connection_state", {"heartbeat_interval_seconds": 0.01, "rooms": ["R"]})
+    c, seen = client(state + msg(1))
+    next(c.events())
+
+    def beats():
+        return [r for r in seen if r.url.path.endswith("/connection/beat")]
+
+    assert _wait(lambda: len(beats()) >= 2)
+    c.close()
+    assert json.loads(beats()[0].content)["connection_id"] == c.connection_id
+
+
+def test_beat_404_triggers_reconnect():
+    n = [0]
+
+    def slow():
+        yield STATE.replace("3600", "0.01").encode()
+        time.sleep(0.5)
+        yield b": ka\n\n"
+
+    def handler(req):
+        if req.url.path.endswith("/events"):
+            n[0] += 1
+            body = slow() if n[0] == 1 else iter([(STATE + msg(5)).encode()])
+            return httpx.Response(200, content=body)
+        if req.url.path.endswith("/connection/beat"):
+            return httpx.Response(404)
+        return httpx.Response(200, json={"result": []})
+
+    c = SwitchClient("http://s", "k", "a1", http=httpx.Client(transport=httpx.MockTransport(handler)),
+                     retry_delay=0)
+    m = next(c.events())
+    c.close()
+    assert m.sequence == 5 and n[0] >= 2
+
+
+def test_op_before_events_opens_stream_first():
+    c, seen = client(STATE)
+    assert c.op("list_rooms")
+    c.close()
+    paths = [r.url.path for r in seen]
+    assert paths[0].endswith("/events") and paths.index(next(p for p in paths if "/ops/" in p)) > 0
+
+
+def test_op_409_not_open_retries_after_reconnect():
+    streams = [STATE] * 100
+    ops = []
+
+    def handler(req):
+        if req.url.path.endswith("/events"):
+            return httpx.Response(200, content=streams.pop(0).encode() if streams else b"")
+        ops.append(req)
+        if len(ops) == 1:
+            return httpx.Response(409, json={"detail": "connection x is not open; reconnect"})
+        return httpx.Response(200, json={"result": ["ok"]})
+
+    c = SwitchClient("http://s", "k", "a1", http=httpx.Client(transport=httpx.MockTransport(handler)),
+                     retry_delay=0.05)
+    assert c.op("list_rooms") == ["ok"]
+    c.close()
+    assert len(ops) == 2
+
+
+def test_start_timeout_reports_status():
+    import pytest
+    c = SwitchClient("http://s", "k", "a1", retry_delay=0.05,
+                     http=httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(401))))
+    with pytest.raises(RuntimeError, match="last status 401"):
+        c.start(timeout=0.3)
+    c.close()
