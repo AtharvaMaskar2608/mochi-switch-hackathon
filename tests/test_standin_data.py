@@ -54,3 +54,19 @@ def test_spike_visible():
 
     cut = "date((select max(created_at) from tickets),'-6 days')"
     assert avg(f">= {cut}", 7) > 2 * avg(f"< {cut}", 23)
+
+
+def test_alias_cannot_leak_email():
+    t = ask("select email as e, substr(email,1,3) as s from tickets limit 3")
+    assert "example" not in t and "@" not in t
+
+
+def test_expression_cannot_leak_customer_name():
+    t = ask("select upper(customer_name) as n, customer_name || 'x' as m from tickets limit 3")
+    assert not any(n in t for n in ("AVA", "LIAM", "Ava", "Liam", "Sam", "Zoe"))
+
+
+def test_reply_strips_mentions():
+    t = ask('select 1 as "@reviewer"')
+    assert "@" not in t and "\uff20reviewer" in t
+    assert "@" not in ask("select nope@x from tickets")

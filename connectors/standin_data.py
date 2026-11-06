@@ -42,7 +42,14 @@ def check_sql(sql: str) -> str:
 
 
 def connect() -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    # PII columns read as NULL however the query refers to them (alias, substr, ...)
+    con.set_authorizer(
+        lambda act, t, c, *_: sqlite3.SQLITE_IGNORE
+        if act == sqlite3.SQLITE_READ and t == "tickets" and c in MASKED
+        else sqlite3.SQLITE_OK
+    )
+    return con
 
 
 def run_select(sql: str, limit: int = 20) -> tuple[list[str], list[tuple]]:
@@ -57,11 +64,15 @@ def run_select(sql: str, limit: int = 20) -> tuple[list[str], list[tuple]]:
         con.close()
 
 
+def clean(v) -> str:
+    return str(v).replace("@", "\uff20")  # no live @mentions in replies
+
+
 def table(cols: list[str], rows: list[tuple]) -> str:
     if not rows:
         return "No rows."
-    out = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
-    out += ["| " + " | ".join(str(v) for v in r) + " |" for r in rows]
+    out = ["| " + " | ".join(map(clean, cols)) + " |", "|" + "---|" * len(cols)]
+    out += ["| " + " | ".join(map(clean, r)) + " |" for r in rows]
     return "\n".join(out)
 
 
@@ -83,7 +94,7 @@ def handle(msg: Msg, client=None) -> Reply:
     try:
         return Reply(table(*run_select(sql)))
     except (ValueError, sqlite3.Error) as e:
-        return Reply(f"Sorry, I could not run that query: {e}")
+        return Reply(f"Sorry, I could not run that query: {clean(e)}")
 
 
 if __name__ == "__main__":
