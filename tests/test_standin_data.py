@@ -72,6 +72,11 @@ def test_thinking_blocks_skipped():
     assert sd.handle(Msg("r", "#x", 1, "u", "U", "q", None, True, False, "t"), client).text == "| n |\n|---|\n| 1 |"
 
 
+def test_fenced_query_inside_prose_is_used():
+    assert ask("I can't reach your warehouse, but run this:\n```sql\nselect 1 as n\n```\nCaveats: none.") == \
+        "| n |\n|---|\n| 1 |"
+
+
 def test_reply_strips_mentions():
     t = ask('select 1 as "@reviewer"')
     assert "@" not in t and "\uff20reviewer" in t

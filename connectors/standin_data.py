@@ -86,13 +86,16 @@ def handle(msg: Msg, client=None) -> Reply:
     client = client or _client()
     r = client.messages.create(
         model=MODEL,
-        max_tokens=400,
+        max_tokens=600,
         thinking={"type": "disabled"},  # else thinking can eat the whole budget and no SQL comes back
-        system=f"Write ONE SQLite SELECT statement answering the question. Schema: {SCHEMA}. Output only the SQL.",
+        system=(f"You turn a data request into ONE SQLite SELECT over this schema: {SCHEMA}. The query is run "
+                "for you. Reply with the SQL only: no prose, no caveats. The request may be a long brief; answer "
+                "its main data question."),
         messages=[{"role": "user", "content": msg.body}],
     )
     text = "".join(b.text for b in r.content if getattr(b, "type", "text") == "text")  # skip thinking blocks
-    sql = text.strip().strip("`").removeprefix("sql").strip()
+    fence = re.search(r"```(?:sql)?\s*(.*?)```", text, re.S | re.I)  # prose around a fenced query
+    sql = (fence[1] if fence else text).strip().strip("`").removeprefix("sql").strip()
     try:
         return Reply(table(*run_select(sql)))
     except (ValueError, sqlite3.Error) as e:
