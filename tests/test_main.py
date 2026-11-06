@@ -299,6 +299,17 @@ def test_yes_from_someone_else_or_unaddressed_does_not_run_offer(ctx):
     assert [k for k, _ in handle(msg("@chief go ahead", addressed=True), ctx)] == ["open_work_room"]
 
 
+def test_yes_settles_an_unsure_template_but_never_a_hard_ask_first_one(ctx):
+    ctx.gate = gate_of(rung="offer", template="data-question", fits=0.5)
+    handle(msg("@chief refunds have felt high lately", addressed=True), ctx)
+    assert ctx.offers[("R", None, "ravi")]["template"] == "data-question"
+    assert [k for k, _ in handle(msg("@chief yes please", addressed=True), ctx)] == ["open_work_room"]
+    ctx.gate = gate_of(rung="offer", template="release-train", fits=0.5)
+    handle(msg("@chief maybe we should ship the refunds fix", addressed=True), ctx)
+    assert ctx.offers[("R", None, "ravi")]["template"] is None
+    assert handle(msg("@chief yes", addressed=True), ctx) == [("none", {})]
+
+
 def test_profile_slug_sanitized():
     from chief.main import profile_slug
 

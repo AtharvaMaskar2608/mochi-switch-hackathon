@@ -15,7 +15,7 @@ import yaml
 from chief import commands, factory, ticks, writer
 from chief.approvals import Approvals
 from chief.gate import decide, decide_with_claude
-from chief.ladder import IST, Ladder, final_rung, in_focus
+from chief.ladder import HARD_ASK_FIRST, IST, Ladder, final_rung, in_focus
 from chief.memory.store import MemoryStore
 from chief.models import Msg, Profile
 from chief.switch_client import connect, resolve_rooms
@@ -223,9 +223,13 @@ def _decide(msg: Msg, slug: str, ctx: Ctx) -> list[Action]:
     if rung == "ask_first" and not person:
         return [_post(msg, TEAMMATE_MUST_ASK)]  # capped at offer: no self-owned approvals
     if rung == "offer":
+        # Not sure it fits? Name the gate's best guess in the offer and let the person's "yes" settle it,
+        # unless that guess is on the hard ask-first list (a yes must never skip an approval).
+        guess = d.template if ACTION_FOR_TEMPLATE.get(d.template, "answer") not in HARD_ASK_FIRST else None
+        offered = template or guess
         if msg.addressed:  # a "yes" from them in this thread runs it (see _handle)
-            ctx.offers[(msg.room_id, msg.thread_id, slug)] = {"msg": msg.__dict__.copy(), "template": template}
-        return [_post(msg, ctx.writer.offer_line(msg, template))]
+            ctx.offers[(msg.room_id, msg.thread_id, slug)] = {"msg": msg.__dict__.copy(), "template": offered}
+        return [_post(msg, ctx.writer.offer_line(msg, offered))]
     if rung == "ask_first":
         owner = {"deploy": ctx.release_owner, "create_agent": ctx.org_admin}.get(action, slug)
         return [_approval(msg, owner, action, template)]
