@@ -197,3 +197,32 @@ def test_resolve_rooms_exact_then_suffix():
              {"room_id": "5", "name": "#eng"}]
     c = SimpleNamespace(op=lambda name: rooms)
     assert resolve_rooms(c, ["product", "chief-ops", "eng", "leadership"]) == {"product": "1", "chief-ops": "2", "eng": "4"}
+
+
+def test_knowledge_doc_is_chiefs_own_so_updates_are_allowed():
+    from chief.memory.dreamer import KNOWLEDGE_DOC
+
+    docs = [{"id": "D0", "name": "Team knowledge", "mine": False, "content": "(placeholder)"}]  # template-made
+
+    def handler(req: httpx.Request):
+        op = req.url.path.rsplit("/", 1)[1]
+        args = json.loads(req.content or b"{}")
+        if op == "events":
+            return httpx.Response(200, content=STATE.encode(), headers={"content-type": "text/event-stream"})
+        if op == "connect_to_room":
+            return httpx.Response(200, json={"result": {"documents": [{"id": d["id"], "name": d["name"]} for d in docs]}})
+        if op == "update_room_document":
+            d = next(d for d in docs if d["id"] == args["document_id"])
+            if not d["mine"]:
+                return httpx.Response(403, json={"error": "only the document's creator can update it"})
+            d["content"] = args["content"]
+        if op == "create_room_document":
+            docs.append({"id": f"D{len(docs)}", "name": args["name"], "mine": True, "content": args["content"]})
+            return httpx.Response(200, json={"result": {"document_id": docs[-1]["id"]}})
+        return httpx.Response(200, json={"result": {"ok": True}})
+
+    c = SwitchClient("http://s", "k", "a1", http=httpx.Client(transport=httpx.MockTransport(handler)), retry_delay=0)
+    assert c.room_doc("R", KNOWLEDGE_DOC, "- a") == "D1"  # first night: published by Chief
+    assert c.room_doc("R", KNOWLEDGE_DOC, "- a\n- b") == "D1"  # next night: updated, no 403
+    assert [d["content"] for d in docs] == ["(placeholder)", "- a\n- b"]
+    c.close()

@@ -102,21 +102,18 @@ resources:
     group: brightcart
     name: product
     description: Product questions and data.
+    instructions: "Standing team knowledge is in the 'Chief: team knowledge' doc. Chief maintains it; read it, do not edit it."
     agents: [chief, mochi_data]
     users: [asha, ravi]
     roles:
       - name: data-steward
         instructions: Answers data questions with a table and a Mochi artifact link, then posts DONE.
-    docs:
-      - name: Team knowledge
-        description: Standing knowledge for this room.
-        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
-        content: "(placeholder: the dreamer replaces this)"
   leadership:
     type: room
     group: brightcart
     name: leadership
     description: Leadership updates and digests.
+    instructions: "Standing team knowledge is in the 'Chief: team knowledge' doc. Chief maintains it; read it, do not edit it."
     agents: [chief, ship]
     users: [asha, ravi]
     roles:
@@ -124,16 +121,12 @@ resources:
         instructions: Writes the shipped digest and release notes, then posts DONE.
       - name: video
         instructions: Makes the short video for a digest, when asked.
-    docs:
-      - name: Team knowledge
-        description: Standing knowledge for this room.
-        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
-        content: "(placeholder: the dreamer replaces this)"
   eng:
     type: room
     group: brightcart
     name: eng
     description: Engineering.
+    instructions: "Standing team knowledge is in the 'Chief: team knowledge' doc. Chief maintains it; read it, do not edit it."
     agents: [chief, reviewer, sre, intern_meera, intern_dev]
     users: [ravi, meera, dev]
     roles:
@@ -149,20 +142,11 @@ resources:
         instructions: Runs the security code gate on a release.
       - name: deployer
         instructions: Runs the deploy dry run. Never deploys for real.
-    docs:
-      - name: Team knowledge
-        description: Standing knowledge for this room.
-        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
-        content: "(placeholder: the dreamer replaces this)"
   chief_ops:
     type: room
     group: brightcart
     name: chief-ops
     description: Chief's own control room; ticks and approvals.
+    instructions: "Standing team knowledge is in the 'Chief: team knowledge' doc. Chief maintains it; read it, do not edit it."
     agents: [chief]
     users: [asha, ravi, meera, dev]
-    docs:
-      - name: Team knowledge
-        description: Standing knowledge for this room.
-        instructions: Read for standing team knowledge. Chief's dreamer maintains it; do not edit.
-        content: "(placeholder: the dreamer replaces this)"

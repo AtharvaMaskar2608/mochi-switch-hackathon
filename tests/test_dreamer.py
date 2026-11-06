@@ -138,7 +138,7 @@ def test_run_nightly_end_to_end(tmp_path):
     fake = Fake([{"owner": "asha", "kind": "fact", "text": "Owns Billing", "tierHint": "personal"}])
     sw = Sw()
     note = dreamer.run_nightly(sw, store, ["#eng"], fake, today=date(2026, 11, 7))
-    assert "1 new" in note and sw.docs == [("#eng", "Team knowledge")]
+    assert "1 new" in note and sw.docs == [("#eng", "Chief: team knowledge")]
     assert (repo / "memory/MEMORY.md").exists()
     log = subprocess.run(["git", "log", "--format=%s"], cwd=repo, capture_output=True, text=True).stdout
     assert log.strip() == "memory: dream 2026-11-07"

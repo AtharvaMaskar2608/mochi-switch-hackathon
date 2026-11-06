@@ -1,4 +1,5 @@
 """Claude-written short text. Every output is sanitized: no ASCII '@' ever leaves this module."""
+import json
 from typing import TYPE_CHECKING
 
 from chief.models import Msg, Profile
@@ -25,6 +26,7 @@ def _call(client, model: str, system: str, user: str, max_tokens: int) -> str:
         model=model,
         max_tokens=max_tokens,
         system=system + _DATA_RULE,
+        thinking={"type": "disabled"},  # else thinking eats the small budgets below
         messages=[{"role": "user", "content": user}],
     )
     return sanitize("".join(b.text for b in r.content if getattr(b, "type", "text") == "text").strip())
@@ -38,6 +40,9 @@ def _hits(hits: "list[Item]") -> str:
     return "\n".join(f"- ({h.kind}) {h.text}" for h in hits) or "(none)"
 
 
+VIDEO_ASK = "\n\nThey also want a short video: after the digest, hand it to designer (the video role)."
+
+
 def brief(msg: Msg, sender: Profile, memory_hits: "list[Item]", template: str, client=None) -> str:
     user = (
         f"Template: {template}\nAsked by: {sender.name} ({sender.role}), style: {sender.style}\n"
@@ -49,7 +54,24 @@ def brief(msg: Msg, sender: Profile, memory_hits: "list[Item]", template: str, c
         "You write a brief for a specialist agent: who asked, why, what they already know, "
         "the format wanted, and any links. Concise and self-contained.",
         user, 1200,
-    )
+    ) + (VIDEO_ASK if "video" in msg.body.lower() else "")
+
+
+def split_requests(text: str, client=None) -> list[str]:
+    """The separate requests in one message (at most 3); [text] if there is one, or on any error."""
+    try:
+        out = _call(
+            client, HAIKU,
+            "Split the message into the separate requests it makes. Reply with a JSON array of strings only, "
+            "at most 3, each a self-contained request in the sender's words. Keep a follow-up that refers to "
+            "another request (like 'make it a video') together with that request. One request: an array of one.",
+            _data(text), 300,
+        )
+        parts = json.loads(out[out.index("["): out.rindex("]") + 1])
+        parts = [p.strip() for p in parts if isinstance(p, str) and p.strip()][:3]
+        return parts or [text]
+    except Exception:
+        return [text]
 
 
 def restyle(answer: str, reader: Profile, client=None) -> str:

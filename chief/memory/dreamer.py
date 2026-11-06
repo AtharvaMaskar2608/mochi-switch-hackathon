@@ -11,6 +11,7 @@ from chief.memory.store import MAX_ITEM, Item, MemoryStore
 from chief.writer import SONNET, _call
 
 STALE_DAYS = 90
+KNOWLEDGE_DOC = "Chief: team knowledge"  # Chief creates it, so Chief may update it (a template-made doc refuses: 403)
 MIN_PEOPLE = 3
 MAX_CLUSTERS = 3
 QUOTE_WORDS = 12
@@ -219,7 +220,7 @@ def run_nightly(client_switch, store: MemoryStore, rooms: list[str], client=None
     (commit or _git_commit)(store.root, str(today))
     doc = "\n".join(f"- {i.text}" for i in store.items("team")) or "(nothing yet)"
     for room in rooms:
-        client_switch.room_doc(room, "Team knowledge", doc)
+        client_switch.room_doc(room, KNOWLEDGE_DOC, doc)
     note = f"What I learned: {stored} new, {updated} updated, {tidied} tidied."
     if proposals:
         note += " Proposed for the team:\n" + "\n".join(f"- {p}" for p in proposals)
