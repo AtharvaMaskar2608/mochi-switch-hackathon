@@ -177,12 +177,11 @@ VISIBLE = {"post", "target", "approval", "open_work_room"}
 
 
 def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
-    tick = re.fullmatch(r"\[tick\]\s+(\S+)", msg.body.strip())
     if ctx.self_name in (msg.sender, msg.sender_name.lower()):
-        return ctx.on_tick(tick[1], ctx) if tick else []  # only Chief's own timer posts run ticks
+        return []  # never answer itself; timer ticks run in-process (run(): tick_loop on_fire)
     if msg.is_agent and not msg.addressed:
         return []
-    if tick:
+    if re.fullmatch(r"\[tick\]\s+(\S+)", msg.body.strip()):
         return []  # a [tick] body from anyone else is ignored
     slug = profile_slug(msg.sender_name)
     if cmd := commands.parse(msg.body):
@@ -250,13 +249,16 @@ def _apply_one(kind: str, a: dict, client, ctx: Ctx) -> None:
     elif kind == "open_work_room":
         yaml_text = (ctx.workflows_dir / f"{a['template']}.yaml").read_text()
         inputs = {"brief": a["brief"], "asker": a["asker"]}
+        names = None
         if "data_agent" in (yaml.safe_load(yaml_text).get("params") or {}):
             inputs["data_agent"] = ctx.data_agent
+            names = [ctx.data_agent]  # by name: the role has no holder until the agent assumes it at kickoff
         room = client.room_from_yaml(yaml_text, inputs)
         rid = room.get("id") or room.get("room_id")
         ctx.work_rooms[rid] = a["asker"]
-        client.target(rid, a["brief"], roles=[a["lead_role"]])
-        client.post(a["room_id"], f"opened {room.get('name', 'a work room')} for this", thread_id=a.get("thread_id"))
+        client.target(rid, a["brief"], names=names, roles=None if names else [a["lead_role"]])
+        name = room.get("room_name") or room.get("name") or "a work room"
+        client.post(a["room_id"], f"opened {name} for this", thread_id=a.get("thread_id"))
     elif kind == "approval":
         code = ctx.approvals.request(a["action"], a["owner"], a)
         client.post(a["room_id"], f"{a['owner']}: this needs your ok ({a['action']}). "
@@ -316,8 +318,13 @@ def run() -> None:
                 release_held(client, ctx)
 
     threading.Thread(target=releaser, daemon=True).start()
+    def fire(kind: str) -> None:  # Switch does not echo Chief's own [tick] post back, so run it here
+        with lock:
+            apply(ctx.on_tick(kind, ctx), client, ctx)
+
     if "chief-ops" in ctx.room_ids:
-        threading.Thread(target=ticks.tick_loop, args=(client, ctx.room_ids["chief-ops"]), daemon=True).start()
+        threading.Thread(target=ticks.tick_loop, args=(client, ctx.room_ids["chief-ops"]),
+                         kwargs={"on_fire": fire}, daemon=True).start()
     else:
         log.warning("no chief-ops room found: timer ticks are off")
     for msg in client.events():

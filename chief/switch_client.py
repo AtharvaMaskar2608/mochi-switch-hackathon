@@ -35,7 +35,7 @@ def register(base_url: str, registration_token: str, name: str, description: str
         headers={"Authorization": f"Bearer {registration_token}"},
         json={"name": name, "description": description, "connector_type": "e2e",
               "integration_profile": PROFILE},
-        timeout=30,
+        timeout=120,  # registration provisions chat bot accounts; slow on a cold server
     )
     r.raise_for_status()
     b = r.json()
@@ -246,6 +246,11 @@ class SwitchClient:
             self._enter(room_id)
             return self.op("send_targeted_message", body=body, target_names=names,
                            target_roles=roles, thread_id=thread_id)
+
+    def assume_role(self, room_id: str, role: str):
+        with self._lock:
+            self._enter(room_id)
+            return self.op("assume_role", role=role)
 
     def context(self, room_id: str, limit: int = 50):
         with self._lock:

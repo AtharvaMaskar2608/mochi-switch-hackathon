@@ -90,7 +90,8 @@ def handle(msg: Msg, client=None) -> Reply:
         system=f"Write ONE SQLite SELECT statement answering the question. Schema: {SCHEMA}. Output only the SQL.",
         messages=[{"role": "user", "content": msg.body}],
     )
-    sql = r.content[0].text.strip().strip("`").removeprefix("sql").strip()
+    text = "".join(b.text for b in r.content if getattr(b, "type", "text") == "text")  # skip thinking blocks
+    sql = text.strip().strip("`").removeprefix("sql").strip()
     try:
         return Reply(table(*run_select(sql)))
     except (ValueError, sqlite3.Error) as e:

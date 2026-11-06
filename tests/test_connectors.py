@@ -102,3 +102,11 @@ def test_echo_and_reply_strip_mentions():
     c = FakeClient([msg("hey @ship do it")])
     run_connector("x", lambda m: (time.sleep(0.2), Reply("ping @ship"))[1], [], client=c, long_s=0.05, once=True)
     assert all("@" not in x[1] for x in c.calls) and "\uff20ship" in c.calls[0][1]
+
+
+def test_kickoff_assumes_own_role_and_skips_handler():
+    c = FakeClient([msg("@x take the data-steward role. Read the brief."), msg("@x take the deployer role.")])
+    c.assume_role = lambda room, role: c.calls.append(("assume", room, role))
+    run_connector("x", lambda m: Reply("handled"), ["data-steward"], client=c, once=True)
+    assert c.calls[:2] == [("assume", "r1", "data-steward"), ("post", "took the data-steward role; waiting for the brief", "t1")]
+    assert c.calls[2:] == [("post", "handled", "t1")]  # not its role: an ordinary message

@@ -1,4 +1,4 @@
-"""Timer ticks: Chief posts `[tick] <kind>` into #chief-ops, then reacts to its own post via on_tick."""
+"""Timer ticks: Chief posts `[tick] <kind>` into #chief-ops (a visible log), then runs on_tick in-process."""
 import dataclasses
 import sys
 import time
@@ -34,7 +34,7 @@ def due(now: datetime, last: dict[str, datetime]) -> list[str]:
 
 
 def tick_loop(client, chief_ops_room_id: str, now=lambda: datetime.now(IST), sleep=time.sleep,
-              every: float = 30, stop=lambda: False) -> None:
+              every: float = 30, stop=lambda: False, on_fire=lambda kind: None) -> None:
     last: dict[str, datetime] = {}
     while not stop():
         t = now()
@@ -43,6 +43,11 @@ def tick_loop(client, chief_ops_room_id: str, now=lambda: datetime.now(IST), sle
                 client.post(chief_ops_room_id, f"[tick] {kind}")
                 last[kind] = t
             except Exception as e:  # a network blip must not kill the timer; retried next round
+                print(f"tick {kind}: {type(e).__name__}: {e}", file=sys.stderr)
+                continue
+            try:
+                on_fire(kind)
+            except Exception as e:
                 print(f"tick {kind}: {type(e).__name__}: {e}", file=sys.stderr)
         sleep(every)
 

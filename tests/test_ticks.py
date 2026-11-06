@@ -77,3 +77,19 @@ def test_tick_loop_survives_post_error(capsys):
     tick_loop(SimpleNamespace(post=post), "ops", now=lambda: at(FRI, 9, 1), sleep=sleep, stop=lambda: n[0] >= 2)
     assert "[tick] morning" in posts  # failed once, retried next round
     assert "tick morning: ConnectionError" in capsys.readouterr().err
+
+
+def test_tick_loop_fires_after_post_and_survives_fire_error(capsys):
+    fired, n = [], [0]
+
+    def on_fire(kind):
+        fired.append(kind)
+        raise RuntimeError("writer down")
+
+    def sleep(_):
+        n[0] += 1
+
+    tick_loop(SimpleNamespace(post=lambda room, body: None), "ops", now=lambda: at(FRI, 9, 1), sleep=sleep,
+              stop=lambda: n[0] >= 2, on_fire=on_fire)
+    assert sorted(fired) == ["dream", "morning"]  # once each: a failed fire is not retried
+    assert "writer down" in capsys.readouterr().err

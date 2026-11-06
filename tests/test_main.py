@@ -255,9 +255,9 @@ def test_writer_error_means_no_action(ctx):
 def test_ticks_and_tick_command_go_to_hook(ctx):
     seen = []
     ctx.on_tick = lambda kind, c: seen.append(kind) or []
-    handle(msg("[tick] morning", sender="chief"), ctx)
+    handle(msg("[tick] morning", sender="chief"), ctx)  # Chief's own post: never acted on (tick_loop runs it)
     handle(msg("!tick dream"), ctx)
-    assert seen == ["morning", "dream"]
+    assert seen == ["dream"]
 
 
 def test_remember_and_forget(ctx):
@@ -322,6 +322,8 @@ def test_data_agent_passed_when_workflow_declares_it(ctx):
     apply([("open_work_room", {"template": "data-question", "brief": "b", "asker": "ravi",
                                "lead_role": "data-steward", "room_id": "R", "thread_id": None})], c, ctx)
     assert c.log[0][2] == {"brief": "b", "asker": "ravi", "data_agent": "standin-data"}
+    assert c.log[1] == ("target", "W1", "b", ["standin-data"], None)  # by name: nobody holds the role yet
+    assert c.log[2] == ("post", "R", "opened work-data-question-20261107-1100 for this")
 
 
 def test_dream_action_routed_to_ticks(ctx, monkeypatch):
