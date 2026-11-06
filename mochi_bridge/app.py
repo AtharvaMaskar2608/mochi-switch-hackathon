@@ -71,11 +71,15 @@ def create_app(switch, secret: str, channel_map: dict[str, str]) -> FastAPI:
 if __name__ == "__main__":
     import uvicorn
 
-    from chief.switch_client import SwitchClient  # lazy: lands with Task 2
+    from pathlib import Path
 
-    switch = SwitchClient(agent="mochi-alerts")  # ponytail: ctor / room_id() names assumed, adjust to Task 2
-    ids = {name: switch.room_id(name) for name in CHANNEL_MAP.values()}
+    from chief.switch_client import connect, resolve_rooms
+
+    switch = connect("mochi-alerts", "Posts Mochi automation alerts into Switch rooms",
+                     Path(".connector-mochi-alerts.json"))
+    found = resolve_rooms(switch, [n.lstrip("#") for n in CHANNEL_MAP.values()])
+    ids = {n: found[n.lstrip("#")] for n in CHANNEL_MAP.values() if n.lstrip("#") in found}
     uvicorn.run(
-        create_app(switch, os.environ["INTERNAL_HMAC_SECRET"], {c: ids[n] for c, n in CHANNEL_MAP.items()}),
+        create_app(switch, os.environ["INTERNAL_HMAC_SECRET"], {c: ids[n] for c, n in CHANNEL_MAP.items() if n in ids}),
         port=4040,
     )

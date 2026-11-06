@@ -53,3 +53,33 @@ def test_single_call_per_message():
     assert set(f.calls[0][1]) == {"for_me", "rung", "template", "fits", "urgency"}
     assert set(f.calls[0][1]["template"].criteria) == {*TPL, "none"}
     assert f.calls[0][2]["model"] == "jev-1.14.0"
+
+
+class FakeClaude:
+    def __init__(self, text):
+        self.text, self.calls = text, []
+        self.messages = self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return NS(content=[NS(type="text", text=self.text)])
+
+
+def test_claude_gate_maps_json_to_decision():
+    from chief.gate import decide_with_claude
+
+    f = FakeClaude('Here: {"for_me": "yes", "rung": "act", "template": "data-question", "fits": "unsure", "urgency": 2}')
+    assert decide_with_claude(msg(True), P, False, TPL, [], client=f) == Decision(0.9, "act", "data-question", 0.5, 2 / 3)
+    assert f.calls[0]["model"] == "claude-haiku-5-5"
+    f = FakeClaude('{"for_me": "no", "rung": "silent", "template": "none", "fits": "no", "urgency": 9}')
+    assert decide_with_claude(msg(), P, False, TPL, [], client=f) == Decision(0.0, "silent", None, 0.0, 1.0)
+
+
+def test_claude_gate_garbage_falls_back():
+    from chief.gate import decide_with_claude
+
+    for text in ("not json", '{"for_me": "maybe"}', '{"for_me": "yes", "rung": "act", "template": "deploy-prod", '
+                 '"fits": "yes", "urgency": 1}', '{"for_me": "yes", "rung": "merge", "template": "none", '
+                 '"fits": "yes", "urgency": 1}'):
+        assert decide_with_claude(msg(True), P, False, TPL, [], client=FakeClaude(text)).rung == "offer", text
+        assert decide_with_claude(msg(), P, False, TPL, [], client=FakeClaude(text)).rung == "silent", text

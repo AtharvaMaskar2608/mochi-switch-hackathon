@@ -1,5 +1,6 @@
 """Timer ticks: Chief posts `[tick] <kind>` into #chief-ops, then reacts to its own post via on_tick."""
 import dataclasses
+import sys
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -38,9 +39,25 @@ def tick_loop(client, chief_ops_room_id: str, now=lambda: datetime.now(IST), sle
     while not stop():
         t = now()
         for kind in due(t, last):
-            client.post(chief_ops_room_id, f"[tick] {kind}")
-            last[kind] = t
+            try:
+                client.post(chief_ops_room_id, f"[tick] {kind}")
+                last[kind] = t
+            except Exception as e:  # a network blip must not kill the timer; retried next round
+                print(f"tick {kind}: {type(e).__name__}: {e}", file=sys.stderr)
         sleep(every)
+
+
+def held_actions(released: dict[str, list[dict]], profiles: dict, writer) -> list:
+    """One batched brief per (person, room): a held item only ever goes back to the room it came from."""
+    out = []
+    for slug, items in released.items():
+        by_room: dict[str, list[dict]] = {}
+        for i in items:
+            by_room.setdefault(i["room_id"], []).append(i)
+        for room_id, group in by_room.items():
+            out.append(("target", {"room_id": room_id, "names": [slug], "roles": None, "thread_id": None,
+                                   "body": writer.batched_brief([i["text"] for i in group], profiles[slug])}))
+    return out
 
 
 def _room(ctx, slug: str) -> str:
@@ -62,9 +79,7 @@ def on_tick(kind: str, ctx) -> list:
         root = ctx.store.root / "people"
         people = [ctx.store.profile(p.name) for p in sorted(root.glob("*")) if p.is_dir()] if root.exists() else []
         profiles = {p.slug: dataclasses.replace(p, focus=[]) for p in people}
-        return [("target", {"room_id": ctx.hold_rooms[slug], "names": [slug], "roles": None, "thread_id": None,
-                            "body": ctx.writer.batched_brief(items, profiles[slug])})
-                for slug, items in ctx.ladder.release_due(profiles).items() if slug in ctx.hold_rooms]
+        return held_actions(ctx.ladder.release_due(profiles), profiles, ctx.writer)
     return []
 
 

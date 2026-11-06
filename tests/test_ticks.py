@@ -55,9 +55,25 @@ def test_on_tick_evening_releases_holds_even_in_focus(tmp_path):
     store = MemoryStore(tmp_path)
     (tmp_path / "people" / "meera").mkdir(parents=True, exist_ok=True)
     ladder = Ladder()
-    ladder.hold("meera", "ravi: ping")
+    ladder.hold("meera", {"text": "ravi: ping", "room_id": "R9", "thread_id": None})
     writer = SimpleNamespace(batched_brief=lambda items, p: "; ".join(items))
-    ctx = SimpleNamespace(store=store, ladder=ladder, writer=writer, hold_rooms={"meera": "R9"})
+    ctx = SimpleNamespace(store=store, ladder=ladder, writer=writer)
     [(kind, a)] = on_tick("evening", ctx)
     assert kind == "target" and a["room_id"] == "R9" and a["names"] == ["meera"] and a["body"] == "ravi: ping"
     assert on_tick("evening", ctx) == []
+
+
+def test_tick_loop_survives_post_error(capsys):
+    posts, n = [], [0]
+
+    def post(room, body):
+        if n[0] == 0:
+            raise ConnectionError("down")
+        posts.append(body)
+
+    def sleep(_):
+        n[0] += 1
+
+    tick_loop(SimpleNamespace(post=post), "ops", now=lambda: at(FRI, 9, 1), sleep=sleep, stop=lambda: n[0] >= 2)
+    assert "[tick] morning" in posts  # failed once, retried next round
+    assert "tick morning: ConnectionError" in capsys.readouterr().err

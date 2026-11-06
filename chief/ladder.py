@@ -31,7 +31,7 @@ class Ladder:
         self._now = now
         self._posts: dict[str, deque] = defaultdict(deque)
         self._quiet: set[str] = set()
-        self._held: dict[str, list[str]] = defaultdict(list)
+        self._held: dict[str, list] = defaultdict(list)  # items are opaque to the ladder
 
     def allow_unprompted(self, room_id: str) -> bool:
         now, q = self._now(), self._posts[room_id]
@@ -48,10 +48,10 @@ class Ladder:
     def is_quiet(self, room_id: str) -> bool:
         return room_id in self._quiet
 
-    def hold(self, for_slug: str, item: str) -> None:
+    def hold(self, for_slug: str, item) -> None:
         self._held[for_slug].append(item)
 
-    def release_due(self, profiles: dict[str, Profile]) -> dict[str, list[str]]:
+    def release_due(self, profiles: dict[str, Profile]) -> dict[str, list]:
         now = self._now()
         out = {}
         for slug in list(self._held):

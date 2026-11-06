@@ -159,3 +159,32 @@ def test_start_timeout_reports_status():
     with pytest.raises(RuntimeError, match="last status 401"):
         c.start(timeout=0.3)
     c.close()
+
+
+def test_connect_registers_once_and_saves_creds(tmp_path, monkeypatch):
+    from chief import switch_client as sc
+
+    calls = []
+    monkeypatch.setenv("SWITCH_URL", "http://s")
+    monkeypatch.setenv("SWITCH_REGISTRATION_TOKEN", "tok")
+    monkeypatch.setattr(sc, "register", lambda *a: calls.append(a) or ("a1", "key1"))
+    monkeypatch.setattr(sc.SwitchClient, "start", lambda self: None)
+    creds = tmp_path / ".chief.json"
+    c = sc.connect("chief", "desc", creds)
+    assert (c.agent_id, c.headers["Authorization"]) == ("a1", "Bearer key1")
+    assert json.loads(creds.read_text()) == {"agent_id": "a1", "api_key": "key1"}
+    assert creds.stat().st_mode & 0o077 == 0
+    sc.connect("chief", "desc", creds)
+    assert calls == [("http://s", "tok", "chief", "desc")]
+
+
+def test_resolve_rooms_exact_then_suffix():
+    from types import SimpleNamespace
+
+    from chief.switch_client import resolve_rooms
+
+    rooms = [{"room_id": "1", "name": "Mattermost: Product"}, {"room_id": "2", "name": "chief-ops"},
+             {"room_id": "3", "name": "work-product"}, {"room_id": "4", "name": "eng"},
+             {"room_id": "5", "name": "#eng"}]
+    c = SimpleNamespace(op=lambda name: rooms)
+    assert resolve_rooms(c, ["product", "chief-ops", "eng", "leadership"]) == {"product": "1", "chief-ops": "2", "eng": "4"}

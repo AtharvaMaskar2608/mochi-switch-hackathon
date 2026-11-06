@@ -24,6 +24,8 @@ def load(p):
 
 def expand(s):
     """Expand {asker} to each developer (the only askers who own an intern) so placeholders can be checked against the table."""
+    if "{data_agent}" in s:  # data-question: mochi-data, or standin-data on the judge path
+        return {s.replace("{data_agent}", a) for a in ("mochi-data", "standin-data")}
     return {s.replace("{asker}", p) for p in ("meera", "dev")} if "{asker}" in s else {s}
 
 

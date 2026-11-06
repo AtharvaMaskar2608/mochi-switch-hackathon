@@ -1,6 +1,4 @@
 """Generic connector: an existing agent joins Switch rooms as a teammate."""
-import json
-import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -62,15 +60,10 @@ def _work(client, msg: Msg, handler: Callable[[Msg], Reply], long_s: float) -> N
 
 
 def _default_client(name: str, roles: list[str]):
-    from chief.switch_client import SwitchClient, register  # lazy: built in Task 2
+    from chief.switch_client import connect
 
-    cache = Path(f".connector-{name}.json")
-    if cache.exists():
-        creds = json.loads(cache.read_text())
-    else:
-        creds = register(os.environ["SWITCH_URL"], os.environ["SWITCH_REGISTRATION_TOKEN"], name, roles)
-        cache.write_text(json.dumps(creds))
-    return SwitchClient(os.environ["SWITCH_URL"], **creds)
+    # roles are hats granted per room by the templates; the description just says which it wears
+    return connect(name, f"{name} connector; roles: {', '.join(roles) or 'none'}", Path(f".connector-{name}.json"))
 
 
 def run_connector(name: str, handler: Callable[[Msg], Reply], roles: list[str],
