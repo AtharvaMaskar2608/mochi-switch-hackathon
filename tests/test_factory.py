@@ -8,7 +8,7 @@ from chief import factory
 from chief.factory import TeamSpec
 
 SPEC = TeamSpec("growth", [{"name": "kiran", "role": "dev"}, {"name": "zoya", "role": "marketer"}])
-TEMPLATE = (Path(factory.ROOT) / "workflows/org-team.yaml").read_text()
+TEMPLATE = (Path(factory.ROOT) / "org/org-team.yaml.tmpl").read_text()
 
 
 class FakeClient:
@@ -34,8 +34,8 @@ class FakeSwitch:
 
 
 def sandbox(tmp_path, monkeypatch):
-    (tmp_path / "workflows").mkdir()
-    (tmp_path / "workflows/org-team.yaml").write_text(TEMPLATE)
+    (tmp_path / "org").mkdir()
+    (tmp_path / "org/org-team.yaml.tmpl").write_text(TEMPLATE)
     monkeypatch.setattr(factory, "ROOT", tmp_path)
 
 

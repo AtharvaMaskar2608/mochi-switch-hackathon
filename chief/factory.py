@@ -96,7 +96,7 @@ def render(spec: TeamSpec) -> str:
     def dump(k, v):
         return yaml.safe_dump({k: v}, sort_keys=False).rstrip() if v else ""
 
-    out = (ROOT / "workflows" / "org-team.yaml").read_text()
+    out = (ROOT / "org" / "org-team.yaml.tmpl").read_text()
     return out.replace("__AGENTS__", dump("agents", interns)).replace("__ROOMS__", dump("rooms", rooms))
 
 
