@@ -2,7 +2,9 @@
 import argparse
 import json
 import os
+import queue
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -55,6 +57,11 @@ class SwitchClient:
         self._stop = threading.Event()
         self._beat: threading.Thread | None = None
         self._resp: httpx.Response | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()  # set while a stream is open
+        self._connected_once = threading.Event()  # a connection_state frame has arrived
+        self._connects = 0  # connection_state frames seen
+        self._queue: queue.Queue = queue.Queue()
 
     def close(self) -> None:
         self._stop.set()
@@ -94,13 +101,33 @@ class SwitchClient:
     def _room_name(self, room_id: str) -> str:
         if room_id not in self._room_names:
             try:
-                for r in self.op("list_rooms"):
-                    self._room_names[r["room_id"]] = r["name"]
+                r = self._post_op("list_rooms", {})  # no retry/wait: runs on the stream thread
+                r.raise_for_status()
+                for x in r.json().get("result", []):
+                    self._room_names[x["room_id"]] = x["name"]
             except Exception:
                 pass
         return self._room_names.get(room_id, room_id)
 
+    def start(self, rooms: list[str] | None = None, timeout: float = 10) -> None:
+        """Open the stream in a daemon thread; return once connection_state arrived."""
+        if self._thread is None or not self._thread.is_alive():
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, args=(rooms,), daemon=True)
+            self._thread.start()
+        if not self._connected_once.wait(timeout):
+            raise RuntimeError("switch: no connection_state frame within %ss" % timeout)
+
     def events(self, rooms: list[str] | None = None) -> Iterator[Msg]:
+        self.start(rooms)
+        while not self._stop.is_set():
+            try:
+                d = self._queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            yield self._msg(d)
+
+    def _run(self, rooms: list[str] | None) -> None:
         params = {"connection_id": self.connection_id, "scope": "all", "filter": "all"}
         if rooms:
             params["rooms"] = ",".join(rooms)
@@ -123,6 +150,9 @@ class SwitchClient:
                                     target=self._heartbeat, daemon=True,
                                     args=(d.get("heartbeat_interval_seconds", 2),))
                                 self._beat.start()
+                            self._connects += 1
+                            self._ready.set()
+                            self._connected_once.set()
                         elif kind == "gap":
                             self._gap_pending = True
                             self.gap_rooms |= self._covered  # scope=all: a gap hits every room
@@ -138,11 +168,13 @@ class SwitchClient:
                             if self._gap_pending:
                                 self.gap_rooms.add(d["room_id"])
                                 self._gap_pending = False
-                            yield self._msg(d)
+                            self._room_name(d["room_id"])
+                            self._queue.put(d)
             except (httpx.HTTPError, httpx.StreamError):
                 pass
             finally:
                 self._resp = None
+                self._ready.clear()
                 self._room = None  # claim may be lost across a reconnect
             self._stop.wait(self.retry_delay)
 
@@ -152,18 +184,32 @@ class SwitchClient:
         ms = p.get("timestamp")
         ts = datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat() if ms else ""
         return Msg(
-            room_id=d["room_id"], room_name=self._room_name(d["room_id"]), sequence=d["sequence"],
+            room_id=d["room_id"], room_name=self._room_names.get(d["room_id"], d["room_id"]), sequence=d["sequence"],
             sender=sender, sender_name=p.get("sender_name", sender), body=p.get("body", ""),
             thread_id=p.get("thread_id"), addressed=bool(p.get("addressed")),
             # ponytail: "@switch-agent-…" id shape is a convention, not guaranteed by the protocol
             is_agent=sender in self._agent_ids or sender.startswith("@switch-agent"), ts=ts)
 
     # ---- ops ----
-    def op(self, name: str, **args):
-        r = self.http.post(f"{self.base}/ops/{name}", headers={
+    def _post_op(self, name: str, args: dict) -> httpx.Response:
+        return self.http.post(f"{self.base}/ops/{name}", headers={
             **self.headers, "X-Switch-Connection-Id": self.connection_id}, json=args)
-        if r.status_code == 409:
+
+    def op(self, name: str, **args):
+        if not self._ready.is_set() and threading.current_thread() is not self._thread:
+            self.start()  # ops need a live stream on the connection
+        for attempt in (0, 1):
+            before = self._connects
+            r = self._post_op(name, args)
+            if r.status_code != 409:
+                break
             self._room = None  # connection/room claim is gone; re-enter next time
+            if attempt == 0 and "not open" in r.text:
+                end = time.time() + 5  # wait for the stream thread to reconnect
+                while self._connects == before and time.time() < end:
+                    time.sleep(0.05)
+                continue
+            break
         r.raise_for_status()
         return r.json().get("result")
 

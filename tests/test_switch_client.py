@@ -64,9 +64,10 @@ def test_gap_frame_marks_room():
 
 
 def test_op_sends_connection_header():
-    c, seen = client()
+    c, seen = client(STATE)
     c.op("post_message", body="x")
-    r = seen[-1]
+    c.close()
+    r = [x for x in seen if "/ops/" in x.url.path][-1]
     assert r.headers["x-switch-connection-id"] == c.connection_id
     assert json.loads(r.content) == {"body": "x"}
 
@@ -121,4 +122,31 @@ def test_beat_404_triggers_reconnect():
                      retry_delay=0)
     m = next(c.events())
     c.close()
-    assert m.sequence == 5 and n[0] == 2
+    assert m.sequence == 5 and n[0] >= 2
+
+
+def test_op_before_events_opens_stream_first():
+    c, seen = client(STATE)
+    assert c.op("list_rooms")
+    c.close()
+    paths = [r.url.path for r in seen]
+    assert paths[0].endswith("/events") and paths.index(next(p for p in paths if "/ops/" in p)) > 0
+
+
+def test_op_409_not_open_retries_after_reconnect():
+    streams = [STATE] * 100
+    ops = []
+
+    def handler(req):
+        if req.url.path.endswith("/events"):
+            return httpx.Response(200, content=streams.pop(0).encode() if streams else b"")
+        ops.append(req)
+        if len(ops) == 1:
+            return httpx.Response(409, json={"detail": "connection x is not open; reconnect"})
+        return httpx.Response(200, json={"result": ["ok"]})
+
+    c = SwitchClient("http://s", "k", "a1", http=httpx.Client(transport=httpx.MockTransport(handler)),
+                     retry_delay=0.05)
+    assert c.op("list_rooms") == ["ok"]
+    c.close()
+    assert len(ops) == 2
