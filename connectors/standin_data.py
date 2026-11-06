@@ -87,6 +87,7 @@ def handle(msg: Msg, client=None) -> Reply:
     r = client.messages.create(
         model=MODEL,
         max_tokens=400,
+        thinking={"type": "disabled"},  # else thinking can eat the whole budget and no SQL comes back
         system=f"Write ONE SQLite SELECT statement answering the question. Schema: {SCHEMA}. Output only the SQL.",
         messages=[{"role": "user", "content": msg.body}],
     )

@@ -110,6 +110,7 @@ def decide_with_claude(msg: Msg, sender: Profile, recipient_in_focus: bool, temp
             client = anthropic.Anthropic(timeout=15)
         state = json.dumps(build_state(msg, sender, recipient_in_focus, templates, roles))
         r = client.messages.create(model=CLAUDE_MODEL, max_tokens=200, system=_CLAUDE_SYSTEM,
+                                   thinking={"type": "disabled"},  # else thinking eats the 200-token budget
                                    messages=[{"role": "user", "content": state}])
         text = "".join(b.text for b in r.content if getattr(b, "type", "text") == "text")
         d = json.loads(text[text.index("{"): text.rindex("}") + 1])
