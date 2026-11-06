@@ -1,0 +1,39 @@
+# Bug fix and review: based on examples/room-templates/red-blue-workroom.template.yaml.
+# The asker's intern fixes on a branch, the reviewer reviews, in a loop. Only the asker ends it.
+version: 1
+params:
+  brief:
+    type: string
+    multiline: true
+    label: Bug brief
+    description: The repo, the bug and the acceptance items.
+  asker:
+    type: user
+    label: Asker (the developer)
+group:
+  name: brightcart
+rooms:
+  - name: work-bug-fix-review-{$timestamp}
+    description: "{asker}'s intern fixes the bug and the reviewer drives the acceptance loop; {asker} gates the merge."
+    channel_type: channel_private
+    agents: ["intern-{asker}", reviewer, chief]
+    users: ["{asker}"]
+    roles:
+      - name: "intern-{asker}"
+        instructions: Fix the bug on a branch and push. Never merge.
+      - name: reviewer
+        instructions: Review every push against the brief's acceptance items and push back until each is met.
+    instructions: |
+      Bug fix for {asker}.
+
+      Brief:
+      {brief}
+
+      Steps:
+      1. intern-{asker} fixes the bug on a branch and posts the branch and a summary.
+      2. The reviewer reviews against the brief's acceptance items and asks for changes, or says it is ready.
+      3. Repeat 1 and 2 until the reviewer says it is ready.
+
+      End condition: only {asker} ends the loop, by posting approve. Nobody else's approve counts. approve goes through a Chief approval card; merge is always ask-first.
+    kickoff: |
+      @intern-{asker} read the brief in the room instructions, fix the bug on a new branch, and post your plan before your first commit. Then ask the reviewer to review.

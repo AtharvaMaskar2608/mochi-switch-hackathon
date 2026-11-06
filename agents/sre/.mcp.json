@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "GRAFANA_URL", "-e", "GRAFANA_SERVICE_ACCOUNT_TOKEN", "grafana/mcp-grafana", "-t", "stdio", "--disable-write"],
+      "env": {
+        "GRAFANA_URL": "${GRAFANA_URL}",
+        "GRAFANA_SERVICE_ACCOUNT_TOKEN": "${GRAFANA_SERVICE_ACCOUNT_TOKEN}"
+      }
+    },
+    "mochi": {
+      "type": "http",
+      "url": "${MOCHI_MCP_URL}",
+      "headers": {
+        "Authorization": "Bearer ${MOCHI_TOKEN_DEV}"
+      }
+    }
+  }
+}

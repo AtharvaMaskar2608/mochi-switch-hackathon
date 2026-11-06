@@ -1,0 +1,47 @@
+# Release train: reviewer, security gate, release notes, release-owner approval, then a dry run only.
+version: 1
+params:
+  brief:
+    type: string
+    multiline: true
+    label: Release brief
+    description: The repo, the version, and the range to release.
+  asker:
+    type: user
+    label: Asker
+group:
+  name: brightcart
+rooms:
+  - name: work-release-train-{$timestamp}
+    description: Review, security gate, notes, approval and a dry run. Nothing is deployed.
+    channel_type: channel_private
+    agents: [reviewer, security, ship, chief]
+    users: ["{asker}"]
+    roles:
+      - name: reviewer
+        instructions: Review the release range and say ready or list what blocks it.
+      - name: security
+        instructions: Run the security code gate on the release range.
+      - name: release-scribe
+        instructions: Write the release notes.
+      - name: release-owner
+        exclusive: true
+        instructions: Approves the release before the dry run.
+      - name: deployer
+        instructions: Chief posts the dry run result. Nothing is deployed.
+    instructions: |
+      Release train for {asker}.
+
+      Brief:
+      {brief}
+
+      Steps, in order. Each role starts only when the one before it is done:
+      1. reviewer reviews the release range.
+      2. security runs the code gate.
+      3. release-scribe (ship) writes the release notes.
+      4. The release-owner approves. Wait for that approval.
+      5. The deployer step is a dry run. Chief posts: "would deploy vX to staging: N services, M migrations". Nothing is deployed and no deploy command is run.
+
+      Ends when Chief posts the dry-run line.
+    kickoff: |
+      @reviewer you hold the reviewer role. Read the brief in the room instructions and review the release range. Say ready, or list what blocks it.
