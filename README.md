@@ -219,7 +219,7 @@ Tests do not touch the network: `uv sync && uv run pytest`.
 - **Chief's approvals are chat replies, not native cards.** A person posts `approve CODE` / `deny CODE`, and Chief checks the replier against the owner it recorded. Native approval cards appear only for the interns' own tool calls. Approvals key on the chat username; on Mattermost that is unique.
 - **In-process state is lost when Chief restarts:** rate caps, holds, pending approvals, live offers, and work-room origins (so an answer-back still due is dropped). Tick times persist in `.chief-ticks.json`, so a restart doesn't re-fire a tick.
 - After a stream `gap`, Chief re-reads the room with `read_context`, but it doesn't use that context in decisions yet.
-- QA verdict words are fixed (`qa pass` / `pass` / `approved`, `qa fail <notes>` / `fail <notes>`), and a QA room's state lives in Chief's memory: after a restart, Priya's verdict in an old QA room is not acted on. Urgency of a failure is a keyword check (`urgent`, `blocker`, `asap`, …), not a gate call.
+- QA verdict words are fixed (`qa pass` / `pass` / `approved`, `qa fail <notes>` / `fail: <notes>`; the whole message must be the verdict), and a QA room's state lives in Chief's memory: after a restart, Priya's verdict in an old QA room is not acted on. Urgency of a failure is a keyword check (`urgent`, `blocker`, `asap`, …), not a gate call.
 - Designer files are posted as local file paths, not chat attachments.
 - The security connector expects a local checkout of the cyber-security scanner. The designer connector needs a running design-agent. Real Mochi needs its own server and tokens.
 

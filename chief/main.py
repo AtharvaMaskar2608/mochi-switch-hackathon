@@ -420,7 +420,7 @@ def _apply_one(kind: str, a: dict, client, ctx: Ctx) -> None:
     elif kind == "file_ticket":
         _apply_file_ticket(a, client, ctx)
     elif kind == "ticket":
-        _apply_ticket(a, ctx)
+        _apply_ticket(a, client, ctx)
     elif kind == "dream":
         ticks.apply_dream(a, client, ctx)
     elif kind == "remember":
@@ -450,9 +450,13 @@ def release_held(client, ctx: Ctx) -> None:
 QA_OWNER_RE = re.compile(r"qa owner:\s*(.+?)\s*(?:→|->)\s*([a-z][a-z0-9-]{0,30})\b", re.I)
 BRANCH_RE = re.compile(r"(?<![\w./:-])((?:feat|fix|bug|hotfix|bugfix|docs|chore|release)/[\w./-]*\w)", re.I)
 PR_RE = re.compile(r"\b(?:PR|pull request)\s*#?(\d+)\b", re.I)
-# "qa pass" / "pass" / "approved" alone; "qa fail <notes>" / "fail <notes>" (not a chatty "failed to ...")
-VERDICT_RE = re.compile(r"(?:@\S+\s+)*(?:(?:qa\s+)?(pass|passed|approved)[\s.!]*|(qa\s+fail(?:ed)?|fail)\b[\s:,.!-]*(.*))",
-                        re.I | re.S)
+# the model's own copies of Chief's fixed fields ("qa:" only as a person field, so a "QA: <title>" line stays)
+FIXED_LINE_RE = re.compile(r"^[ \t*_#>-]*(?:(?:branch|pr|asked by)[ \t*_]*:.*|qa[ \t*_]*:[ \t*_]*[a-z][a-z0-9-]*[ \t*_.]*)"
+                           r"(?:\n|$)", re.I | re.M)
+# A whole-message verdict only: "qa pass" / "pass" / "passed" / "approved", or "qa fail ..." / "fail: ..." /
+# "fail - ..." / a bare "fail". Chat such as "fail to see why" is not a verdict.
+VERDICT_RE = re.compile(r"(?:@\S+\s+)*(?:(?:qa\s+)?(?P<pass>pass|passed|approved)[\s.!]*"
+                        r"|(?:qa\s+fail(?:ed)?\b[\s:,.!–—-]*|fail\s*:\s*|fail\s+[–—-]\s+|fail[\s.!]*$)(?P<notes>.*))", re.I | re.S)
 URGENT_RE = re.compile(r"\b(urgent|asap|blocker|p0|sev ?1|hotfix)\b", re.I)  # ponytail: keyword urgency, no gate call
 
 
@@ -475,26 +479,36 @@ def _title(brief: str) -> str:
 
 def _ready_for_qa(msg: Msg, sender: Profile, hits, ctx: Ctx) -> list[Action]:
     qa = qa_owner(msg.body, ctx)
-    brief = ctx.writer.brief(msg, sender, hits, "ready-for-qa")
-    lines = []  # fixed fields the qa-agent and the ticket read; the branch line is what qa-agent checks out
+    brief = FIXED_LINE_RE.sub("", ctx.writer.brief(msg, sender, hits, "ready-for-qa")).strip()
+    # Code-extracted fields come FIRST (qa-agent takes the first `branch:`); the model's own such lines are gone.
+    lines = []
     if b := BRANCH_RE.search(msg.body):
         lines.append(f"branch: {b[1]}")
     if pr := PR_RE.search(msg.body):
         lines.append(f"pr: #{pr[1]}")
     lines += [f"asked by: {sender.slug}", f"qa: {qa}"]
-    return [("file_ticket", {"title": _title(brief), "brief": brief + "\n\n" + "\n".join(lines),
+    return [("file_ticket", {"title": _title(brief), "brief": "\n".join(lines) + "\n\n" + brief,
                              "asker": sender.slug, "qa": qa, "room_id": msg.room_id, "thread_id": _root(msg)})]
 
 
+def _gh_reason(e: Exception) -> str:
+    """A short, printable reason for a failed gh call (its last stderr line when there is one)."""
+    err = (getattr(e, "stderr", None) or str(e) or type(e).__name__).strip().splitlines()
+    return writer.sanitize(err[-1] if err else type(e).__name__)[:160]
+
+
 def _apply_file_ticket(a: dict, client, ctx: Ctx) -> None:
-    t = ctx.tickets.create(a["title"], a["brief"], ["ready-for-qa"])
+    try:
+        t, problem = ctx.tickets.create(a["title"], a["brief"], ["ready-for-qa"]), None
+    except Exception as e:  # gh missing, logged out, network: hand off anyway, and say so
+        t, problem = None, f"couldn't file the ticket (gh error: {_gh_reason(e)}); tracking in this thread"
     yaml_text = (ctx.workflows_dir / "ready-for-qa.yaml").read_text()
     try:
         room = client.room_from_yaml(yaml_text, {"brief": a["brief"], "asker": a["asker"], "qa": a["qa"],
                                                  "ticket_url": t["url"] if t else "none"})
     except Exception as e:  # same notice as open_work_room: say so in the thread, don't go quiet
         code = getattr(getattr(e, "response", None), "status_code", type(e).__name__)
-        filed = f"Filed #{t['number']} {t['url']}, but I " if t else "I "
+        filed = f"Filed #{t['number']} {t['url']}, but I " if t else (f"I {problem}, and " if problem else "I ")
         client.post(a["room_id"], f"{filed}couldn't open a ready-for-qa room (Switch said {code}); "
                     "qa-agent may not be running", thread_id=a.get("thread_id"))
         raise
@@ -504,13 +518,24 @@ def _apply_file_ticket(a: dict, client, ctx: Ctx) -> None:
     client.target(rid, a["brief"], names=["qa-agent"])  # by name: the qa role has no holder until kickoff
     who = f"{ctx.store.profile(a['qa']).name} (QA)"
     said = (f"Filed #{t['number']} {t['url']} and handed it to {who}." if t
+            else f"I {problem}. Handed it to {who}." if problem
             else f"No ticket tracker configured; tracking in this thread. Handed it to {who}.")
     client.post(a["room_id"], said, thread_id=a.get("thread_id"))
 
 
-def _apply_ticket(a: dict, ctx: Ctx) -> None:
-    a = dict(a)
-    getattr(ctx.tickets, a.pop("op"))(**a)
+def _apply_ticket(a: dict, client, ctx: Ctx) -> None:
+    """Run the ticket ops in order; only if all succeed, the follow-up actions. On a failure, say so where
+    the verdict was given and in the origin thread, and put the QA room back so the same verdict retries."""
+    try:
+        for op, kwargs in a["ops"]:
+            getattr(ctx.tickets, op)(**kwargs)
+    except Exception as e:
+        ctx.qa_rooms[a["work_room"]] = a["state"]
+        for where in a["tell"]:
+            client.post(where["room_id"], f"{a['failed']}: {_gh_reason(e)}. Say it again to retry.",
+                        thread_id=where["thread_id"])
+        return
+    apply(a["then"], client, ctx)
 
 
 def _qa_verdict(msg: Msg, slug: str, ctx: Ctx) -> list[Action] | None:
@@ -524,28 +549,41 @@ def _qa_verdict(msg: Msg, slug: str, ctx: Ctx) -> list[Action] | None:
         return []  # qa-agent's QA PASSED is advice, and no agent decides
     if slug != q["qa"] or ctx.store.profile(slug).role == "unknown":
         return [_post(msg, f"only {ctx.store.profile(q['qa']).name} (QA) can pass or fail this")]
-    del ctx.qa_rooms[msg.room_id]  # decided once
+    del ctx.qa_rooms[msg.room_id]  # decided once (put back by _apply_ticket if the ticket update fails)
     qa_name, n = ctx.store.profile(slug).name, q["ticket"]
     ref = f"#{n}" if n else "no ticket"
     origin = {"room_id": q["room_id"], "thread_id": q["thread_id"]}
-    if v[1]:
-        acts = [("ticket", {"op": "close", "n": n, "comment": f"Verified by {qa_name} (QA)"})] if n else []
+    here = {"room_id": msg.room_id, "thread_id": _root(msg)}
+    s = ctx.writer.sanitize
+
+    def on_ticket(ops: list, failed: str, then: list[Action]) -> list[Action]:
+        if not n:
+            return then
+        return [("ticket", {"ops": ops, "then": then, "failed": s(failed), "tell": [here, origin],
+                            "work_room": msg.room_id, "state": q})]
+
+    if v["pass"]:
         product = ctx.room_ids.get("product", q["room_id"])
-        return acts + [
-            _post(msg, f"passed; closing {ref}"),
-            ("post", {**origin, "body": ctx.writer.sanitize(f"{q['title']}: verified by {qa_name} (QA), {ref} closed")}),
-            ("target", {"room_id": product, "names": [ctx.pm], "thread_id": None, "body": ctx.writer.sanitize(
-                f"{q['title']} verified by QA, ready for the next release ({ref})")}),
-        ]
-    notes = v[3].strip() or "no notes given"
-    acts = [("ticket", {"op": "comment", "n": n, "body": f"QA failed ({qa_name}): {notes}"}),
-            ("ticket", {"op": "label", "n": n, "add": ["qa-failed"], "remove": ["ready-for-qa"]})] if n else []
-    acts.append(_post(msg, f"failed; sent back to {q['asker']}"))
+        done = [
+            _post(msg, f"passed; {ref} closed" if n else "passed"),
+            ("post", {**origin, "body": s(f"{q['title']}: verified by {qa_name} (QA)" + (f", {ref} closed" if n else ""))}),
+            ("target", {"room_id": product, "names": [ctx.pm], "thread_id": None,
+                        "body": s(f"{q['title']} verified by QA, ready for the next release ({ref})")}),
+        ]  # the PM hears "ready" only after the close succeeded
+        return on_ticket([("close", {"n": n, "comment": f"Verified by {qa_name} (QA)"})],
+                         f"verified by {qa_name}, but closing {ref} failed", done)
+    notes = v["notes"].strip() or "no notes given"
     dev = ctx.store.profile(q["asker"])
-    text = ctx.writer.sanitize(f"QA failed {q['title']} ({ref}), from {qa_name}: {notes}")
+    text = s(f"QA failed {q['title']} ({ref}), from {qa_name}: {notes}")
+    # ponytail: the developer hears about a failure even if GitHub is down; a retried "qa fail" pings them again
     if in_focus(dev, ctx.now()) and not URGENT_RE.search(notes):  # the usual focus hold
-        return acts + [("hold", {"for": dev.slug, "item": {"text": text, **origin}})]
-    return acts + [("target", {**origin, "body": text, "names": [dev.slug]})]
+        route = ("hold", {"for": dev.slug, "item": {"text": text, **origin}})
+    else:
+        route = ("target", {**origin, "body": text, "names": [dev.slug]})
+    ops = [("comment", {"n": n, "body": f"QA failed ({qa_name}): {notes}"}),
+           ("label", {"n": n, "add": ["qa-failed"], "remove": ["ready-for-qa"]})]
+    return [_post(msg, f"failed; sent back to {q['asker']}"), route] + \
+        on_ticket(ops, f"QA failed, but updating {ref} failed", [])
 
 
 ROOM_SLUGS = ["product", "leadership", "eng", "chief-ops"]

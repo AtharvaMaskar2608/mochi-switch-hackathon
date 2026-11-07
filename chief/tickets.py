@@ -7,6 +7,8 @@ import re
 import subprocess
 
 DEMO_LABEL = "brightcart"
+MAX_BODY = 4000  # GitHub allows 65536; a handoff brief never needs more
+_made: set[tuple[str, str]] = set()  # (repo, label) created by this process
 
 
 # ponytail: no TICKETS_REPO -> every call returns None and Chief tracks the handoff in the thread instead
@@ -25,7 +27,9 @@ def _gh(args: list[str], run) -> str:
 
 def _ensure_labels(labels: list[str], run) -> None:
     for name in labels:
-        _gh(["label", "create", name, "--force"], run)  # --force: create or update, never fail on "exists"
+        if (_repo(), name) not in _made:  # once per process; --force: create or update, never fail on "exists"
+            _gh(["label", "create", name, "--force"], run)
+            _made.add((_repo(), name))
 
 
 def create(title: str, body: str, labels: list[str], run=subprocess.run) -> dict | None:
@@ -34,7 +38,7 @@ def create(title: str, body: str, labels: list[str], run=subprocess.run) -> dict
         return None
     labels = [*labels, DEMO_LABEL]
     _ensure_labels(labels, run)
-    args = ["issue", "create", "--title", _clean(title), "--body", _clean(body)]
+    args = ["issue", "create", "--title", _clean(title), "--body", _clean(body)[:MAX_BODY]]
     for name in labels:
         args += ["--label", name]
     url = _gh(args, run).splitlines()[-1]
@@ -43,7 +47,7 @@ def create(title: str, body: str, labels: list[str], run=subprocess.run) -> dict
 
 def comment(n: int, body: str, run=subprocess.run) -> None:
     if _repo():
-        _gh(["issue", "comment", str(n), "--body", _clean(body)], run)
+        _gh(["issue", "comment", str(n), "--body", _clean(body)[:MAX_BODY]], run)
 
 
 def close(n: int, comment: str, run=subprocess.run) -> None:
