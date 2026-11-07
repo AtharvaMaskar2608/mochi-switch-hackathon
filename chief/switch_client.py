@@ -198,7 +198,7 @@ class SwitchClient:
         ts = datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat() if ms else ""
         return Msg(
             room_id=d["room_id"], room_name=self._room_names.get(d["room_id"], d["room_id"]), sequence=d["sequence"],
-            sender=sender, sender_name=p.get("sender_name", sender), body=p.get("body", ""),
+            sender=sender, sender_name=p.get("sender_name", sender), body=p.get("body") or "",
             thread_id=p.get("thread_id"), addressed=bool(p.get("addressed")), message_id=p.get("message_id"),
             # ponytail: "@switch-agent-…" id shape is a convention, not guaranteed by the protocol
             is_agent=sender in self._agent_ids or sender.startswith("@switch-agent"), ts=ts)
@@ -257,7 +257,11 @@ class SwitchClient:
     def context(self, room_id: str, limit: int = 50):
         with self._lock:
             self._enter(room_id)
-            return self.op("read_context", limit=limit)
+            ctx = self.op("read_context", limit=limit)
+        for t in ctx["threads"]:  # a bridge command ("!tick" on Mattermost) is stored with body null
+            for e in [t["root"], *t.get("replies", [])]:
+                e["body"] = e.get("body") or ""
+        return ctx
 
     def room_from_yaml(self, yaml: str, inputs: dict) -> dict:
         return self.op("create_room_from_yaml", yaml=yaml, inputs=inputs)

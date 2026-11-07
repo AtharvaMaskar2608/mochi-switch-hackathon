@@ -226,3 +226,19 @@ def test_knowledge_doc_is_chiefs_own_so_updates_are_allowed():
     assert c.room_doc("R", KNOWLEDGE_DOC, "- a\n- b") == "D1"  # next night: updated, no 403
     assert [d["content"] for d in docs] == ["(placeholder)", "- a\n- b"]
     c.close()
+
+
+def test_context_null_body_reads_as_empty():
+    entry = {"id": "e1", "kind": "message", "sender_name": "asha", "body": None}
+
+    def handler(req: httpx.Request):
+        if req.url.path.endswith("/events"):
+            return httpx.Response(200, content=STATE.encode(), headers={"content-type": "text/event-stream"})
+        if req.url.path.endswith("/ops/read_context"):
+            return httpx.Response(200, json={"result": {"threads": [{"root": dict(entry), "replies": [dict(entry)]}]}})
+        return httpx.Response(200, json={"result": {"ok": True}})
+
+    c = SwitchClient("http://s", "key", "a1", http=httpx.Client(transport=httpx.MockTransport(handler)), retry_delay=0)
+    t = c.context("R")["threads"][0]
+    assert t["root"]["body"] == "" and t["replies"][0]["body"] == ""
+    c.close()

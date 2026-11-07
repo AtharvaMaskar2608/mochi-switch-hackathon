@@ -230,7 +230,8 @@ def test_spoken_chief_counts_as_addressed(body):
     assert spoken_to(body)
 
 
-@pytest.mark.parametrize("body", ["mischief is afoot", "the chief said no", "chiefly refunds", "hey there chief"])
+@pytest.mark.parametrize("body", ["mischief is afoot", "the chief said no", "chiefly refunds", "hey there chief",
+                                  "chief-ops is noisy today", "chief's brief was late"])
 def test_chief_in_passing_is_not_addressed(body):
     from chief.main import spoken_to
     assert not spoken_to(body)
@@ -401,6 +402,19 @@ def test_data_agent_passed_when_workflow_declares_it(ctx):
     assert c.log[2] == ("post", "R", "opened work-data-question-20261107-1100 for this")
 
 
+def test_work_room_that_fails_to_open_is_reported_in_thread(ctx):
+    (ctx.workflows_dir / "shipped-digest.yaml").write_text("name: x\n")
+    c = FakeClient()
+
+    def fail(yaml, inputs):
+        raise RuntimeError("400")
+    c.room_from_yaml = fail
+    apply([("open_work_room", {"template": "shipped-digest", "brief": "b", "asker": "asha", "lead_role": "x",
+                               "room_id": "R", "thread_id": "M1"})], c, ctx)
+    assert c.log == [("post", "R", "couldn't open a shipped-digest room (Switch said RuntimeError); "
+                                   "its agents may not be running")]
+
+
 def test_dream_action_routed_to_ticks(ctx, monkeypatch):
     from chief import ticks
 
@@ -460,6 +474,20 @@ def test_three_requests_open_three_work_rooms(ctx):
     assert [k for k, _ in acts] == ["post", "open_work_room", "open_work_room", "open_work_room"]
     assert acts[0][1]["body"] == "On it, 3 jobs: " + "; ".join(parts)
     assert [a["template"] for _, a in acts[1:]] == ["shipped-digest", "data-question", "bug-fix-review"]
+
+
+def test_one_question_split_in_two_opens_one_room_and_summary_stays_in_thread(ctx):
+    parts = ["where is the refunds data", "what did it do last month"]
+    ctx.gate = gate_of(rung="act", template="data-question", fits=0.9)
+    ctx.writer = FakeWriter(split=parts)
+    m = replace(msg("@chief where is the refunds data and what did it do last month?", addressed=True),
+                message_id="M9")
+    acts = handle(m, ctx)
+    assert [k for k, _ in acts] == ["open_work_room"]  # same template twice: one job, not two rooms
+    tpl = dict(zip(parts, ["shipped-digest", "data-question"]))
+    ctx.gate = lambda m, *a: Decision(for_me=0.9, rung="act", template=tpl[m.body], fits=0.9, urgency=0.3)
+    acts = handle(m, ctx)
+    assert acts[0][0] == "post" and acts[0][1]["thread_id"] == "M9"  # "On it" goes in the asker's thread
 
 
 def test_unaddressed_message_with_and_is_not_split(ctx):

@@ -85,7 +85,7 @@ class Ctx:
 
 
 def _post(msg: Msg, body: str) -> Action:
-    return ("post", {"room_id": msg.room_id, "body": body, "thread_id": msg.thread_id})
+    return ("post", {"room_id": msg.room_id, "body": body, "thread_id": _root(msg)})
 
 
 def _root(msg: Msg) -> str | None:
@@ -245,7 +245,7 @@ VISIBLE = {"post", "target", "approval", "open_work_room"}
 
 def spoken_to(body: str, name: str = "chief") -> bool:
     """A dictated "Chief, ..." or "hey chief ..." has no @-mention, but it is addressed all the same."""
-    return re.match(rf"\W*(?:hey\W+)?{re.escape(name)}\b", body, re.I) is not None
+    return re.match(rf"\W*(?:hey\W+)?{re.escape(name)}(?=$|[\s,:!.?])", body, re.I) is not None
 
 
 def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
@@ -278,6 +278,9 @@ def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
     if len(parts) == 1:
         return _capped(_decide(msg, slug, ctx), msg, ctx)
     results = [_decide(replace(msg, body=part), slug, ctx) for part in parts]  # each: its own gate and ladder
+    rooms = [a["template"] for acts in results for k, a in acts if k == "open_work_room"]
+    if len(rooms) != len(set(rooms)):  # two parts of one question ("where is X and what did it do"): one job
+        return _capped(_decide(msg, slug, ctx), msg, ctx)
     acting = [part for part, acts in zip(parts, results) if any(k in VISIBLE for k, _ in acts)]
     out = [a for acts in results for a in acts if a[0] != "none"]
     if len(acting) >= 2:  # the summary only when it says something the replies don't
@@ -378,7 +381,13 @@ def _apply_one(kind: str, a: dict, client, ctx: Ctx) -> None:
         if "data_agent" in (yaml.safe_load(yaml_text).get("params") or {}):
             inputs["data_agent"] = ctx.data_agent
             names = [ctx.data_agent]  # by name: the role has no holder until the agent assumes it at kickoff
-        room = client.room_from_yaml(yaml_text, inputs)
+        try:
+            room = client.room_from_yaml(yaml_text, inputs)
+        except Exception as e:  # e.g. 400 when a workflow's agents aren't running here: say so, don't go quiet
+            code = getattr(getattr(e, "response", None), "status_code", type(e).__name__)
+            client.post(a["room_id"], f"couldn't open a {a['template']} room (Switch said {code}); "
+                        "its agents may not be running", thread_id=a.get("thread_id"))
+            raise
         rid = room.get("id") or room.get("room_id")
         ctx.work_rooms[rid] = a["asker"]
         lead = LEAD_AGENT.get(a["template"])

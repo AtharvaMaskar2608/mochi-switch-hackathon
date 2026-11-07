@@ -68,8 +68,10 @@ def split_requests(text: str, client=None) -> list[str]:
         out = _call(
             client, HAIKU,
             "Split the message into the separate requests it makes. Reply with a JSON array of strings only, "
-            "at most 3, each a self-contained request in the sender's words. Keep a follow-up that refers to "
-            "another request (like 'make it a video') together with that request. One request: an array of one.",
+            "at most 3, each a self-contained request in the sender's words. Questions about different things are "
+            "separate requests, even in one sentence joined by 'and' ('what did we ship, and why did X jump?' is two). "
+            "Keep a follow-up that refers to another request (like 'make it a video') together with that request. "
+            "One request: an array of one.",
             _data(text), 300,
         )
         parts = json.loads(out[out.index("["): out.rindex("]") + 1])
