@@ -113,6 +113,7 @@ def test_qa_fail_comments_relabels_and_routes_to_dev(qctx):
 def test_qa_fail_respects_focus_hold(qctx):
     handed_off(qctx, sender="meera", body="@chief ready for QA: refunds rounding, branch fix/bc-142")  # meera in focus
     acts = handle(msg("fail: rounding still off", sender="priya", room="W1"), qctx)
+    assert acts[0][1]["body"] == "failed; Meera is heads-down until 15:00, so I'll pass it on then"  # live: not "sent back"
     hold = [a for k, a in acts if k == "hold"]
     assert len(hold) == 1 and hold[0]["for"] == "meera" and hold[0]["item"]["room_id"] == "E"
     assert "rounding still off" in hold[0]["item"]["text"]

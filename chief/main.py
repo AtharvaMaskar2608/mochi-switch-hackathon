@@ -585,11 +585,15 @@ def _qa_verdict(msg: Msg, slug: str, ctx: Ctx) -> list[Action] | None:
     # ponytail: the developer hears about a failure even if GitHub is down; a retried "qa fail" pings them again
     if in_focus(dev, ctx.now()) and not URGENT_RE.search(notes):  # the usual focus hold
         route = ("hold", {"for": dev.slug, "item": {"text": text, **origin}})
+        t = ctx.now().astimezone(IST).strftime("%H:%M")
+        until = next((b for a, b in dev.focus if a <= t < b), "later")
+        said = f"failed; {dev.name} is heads-down until {until}, so I'll pass it on then"
     else:
         route = ("target", {**origin, "body": text, "names": [dev.slug]})
+        said = f"failed; sent back to {dev.name}"
     ops = [("comment", {"n": n, "body": f"QA failed ({qa_name}): {notes}"}),
            ("label", {"n": n, "add": ["qa-failed"], "remove": ["ready-for-qa"]})]
-    return [_post(msg, f"failed; sent back to {q['asker']}"), route] + \
+    return [_post(msg, said), route] + \
         on_ticket(ops, f"QA failed, but updating {ref} failed", [])
 
 
