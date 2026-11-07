@@ -128,7 +128,7 @@ resources:
     description: Engineering.
     instructions: "Standing team knowledge is in the 'Chief: team knowledge' doc. Chief maintains it; read it, do not edit it."
     agents: [chief, reviewer, sre, intern_meera, intern_dev]
-    users: [ravi, meera, dev]
+    users: [ravi, meera, dev, priya]
     roles:
       - name: on-call
         exclusive: true
@@ -142,6 +142,8 @@ resources:
         instructions: Runs the security code gate on a release.
       - name: deployer
         instructions: Runs the deploy dry run. Never deploys for real.
+      - name: qa
+        instructions: Tests a fix handed over as ready for QA and posts QA PASSED or QA FAILED. Advisory; the QA person decides.
   chief_ops:
     type: room
     group: brightcart

@@ -1,8 +1,8 @@
 """Idempotent demo setup on a local Switch + its bundled Mattermost (judge path, story 1).
 
 Steps, each skipped when already done:
-  personal registration key -> Mattermost + Switch users (asha, ravi, meera, dev), linked ->
-  register chief + standin-data -> launch org/brightcart-org.yaml -> Chief's addressing policy ->
+  personal registration key -> Mattermost + Switch users (asha, ravi, meera, dev, priya), linked ->
+  register chief + standin-data + qa-agent -> launch org/brightcart-org.yaml -> Chief's addressing policy ->
   stand-in SQLite db.
 
 usage: uv run python scripts/setup_demo.py [--dry-run]     (run from the repo root)
@@ -20,7 +20,7 @@ import httpx
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-PEOPLE = ["asha", "ravi", "meera", "dev"]
+PEOPLE = ["asha", "ravi", "meera", "dev", "priya"]
 ROOMS = ["product", "leadership", "eng", "chief-ops"]
 GROUP = "brightcart"
 KEY_LABEL = "chief-hackathon-local"
@@ -30,6 +30,7 @@ SWITCH_ENV_FILE = ROOT / ".local-switch.env"
 AGENTS = {
     "chief": (ROOT / ".chief.json", "Chief, the team's chief of staff"),
     "standin-data": (ROOT / ".connector-standin-data.json", "standin-data connector; roles: data-steward"),
+    "qa-agent": (ROOT / ".connector-qa-agent.json", "qa-agent connector; roles: qa"),
 }
 
 

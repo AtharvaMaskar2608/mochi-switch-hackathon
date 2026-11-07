@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 import yaml
 
-from chief import commands, factory, ticks, writer
+from chief import commands, factory, tickets, ticks, writer
 from chief.approvals import Approvals
 from chief.gate import decide, decide_with_claude
 from chief.ladder import HARD_ASK_FIRST, IST, Ladder, final_rung, in_focus
@@ -22,17 +22,19 @@ from chief.switch_client import connect, resolve_rooms
 
 log = logging.getLogger("chief")
 
-Action = tuple[str, dict]  # kind: post|target|open_work_room|approval|hold|remember|forget|none
+Action = tuple[str, dict]  # kind: post|target|open_work_room|file_ticket|ticket|approval|hold|remember|forget|none
 
-TEMPLATES = ["brightcart-org", "data-question", "shipped-digest", "bug-fix-review", "release-train", "org-team"]
+TEMPLATES = ["brightcart-org", "data-question", "shipped-digest", "bug-fix-review", "release-train", "org-team",
+             "ready-for-qa"]
 ROLES = ["data-steward", "release-scribe", "reviewer", "security", "deployer", "on-call", "release-owner",
-         "video", "intern-meera", "intern-dev"]
+         "video", "intern-meera", "intern-dev", "qa"]
 ACTION_FOR_TEMPLATE = {
     "data-question": "mochi_read",
     "shipped-digest": "summarize",
     "bug-fix-review": "open_work_room",
     "release-train": "deploy",
     "org-team": "create_agent",
+    "ready-for-qa": "file_ticket",  # reversible: not on the hard list
 }
 LEAD_ROLE = {
     "data-question": "data-steward",
@@ -82,6 +84,11 @@ class Ctx:
     # work room id -> {"room_id", "thread_id", "asker", "template", "lead", "last", "sent"}: where its answer goes
     origins: dict[str, dict] = field(default_factory=dict)
     data_agent: str = "mochi-data"  # who answers data-question rooms; standin-data on the judge path
+    qa: str = "priya"  # default QA owner; a team memory item "qa owner: <area> → <slug>" overrides it per area
+    pm: str = "ravi"  # told in #product when QA passes
+    tickets: Any = tickets  # chief.tickets (GitHub Issues via gh); a fake in tests
+    # QA work room id -> {"qa", "asker", "title", "ticket", "room_id", "thread_id"}: who decides, where it reports
+    qa_rooms: dict[str, dict] = field(default_factory=dict)
 
 
 def _post(msg: Msg, body: str) -> Action:
@@ -163,6 +170,8 @@ def _approved(payload: dict, ctx: Ctx) -> list[Action]:
 def _act(msg: Msg, sender: Profile, template: str | None, ctx: Ctx) -> list[Action]:
     w = ctx.writer
     hits = ctx.store.search(msg.body, [sender.slug, "team"])
+    if template == "ready-for-qa":  # a handoff, never answered from memory
+        return _ready_for_qa(msg, sender, hits, ctx)
     answer = w.answer_from_memory(msg.body, hits, sender) if hits else None
     if answer:
         return [_post(msg, w.restyle(answer, sender))]
@@ -262,6 +271,8 @@ def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
     if re.fullmatch(r"\[tick\]\s+(\S+)", msg.body.strip()):
         return []  # a [tick] body from anyone else is ignored
     slug = profile_slug(msg.sender_name)
+    if msg.room_id in ctx.qa_rooms and (acts := _qa_verdict(msg, slug, ctx)) is not None:
+        return acts
     if cmd := commands.parse(msg.body):
         return _command(cmd, msg, slug, ctx)
     offer = _take_offer(msg, slug, ctx) if msg.addressed else None
@@ -397,6 +408,10 @@ def _apply_one(kind: str, a: dict, client, ctx: Ctx) -> None:
             client.post(a["room_id"], text, thread_id=a.get("thread_id"))
     elif kind == "hold":
         ctx.ladder.hold(a["for"], a["item"])  # the item carries its own room
+    elif kind == "file_ticket":
+        _apply_file_ticket(a, client, ctx)
+    elif kind == "ticket":
+        _apply_ticket(a, ctx)
     elif kind == "dream":
         ticks.apply_dream(a, client, ctx)
     elif kind == "remember":
@@ -419,6 +434,102 @@ def step(msg: Msg, client, ctx: Ctx) -> None:
 def release_held(client, ctx: Ctx) -> None:
     profiles = {p.slug: p for p in _people(ctx)}
     apply(ticks.held_actions(ctx.ladder.release_due(profiles), profiles, ctx.writer, ctx.ladder), client, ctx)
+
+
+# ---- dev -> QA -> PM handoff (ready-for-qa) ---------------------------------------------------
+
+QA_OWNER_RE = re.compile(r"qa owner:\s*(.+?)\s*(?:→|->)\s*([a-z][a-z0-9-]{0,30})\b", re.I)
+BRANCH_RE = re.compile(r"(?<![\w./:-])((?:feat|fix|bug|hotfix|bugfix|docs|chore|release)/[\w./-]*\w)", re.I)
+PR_RE = re.compile(r"\b(?:PR|pull request)\s*#?(\d+)\b", re.I)
+# "qa pass" / "pass" / "approved" alone; "qa fail <notes>" / "fail <notes>" (not a chatty "failed to ...")
+VERDICT_RE = re.compile(r"(?:@\S+\s+)*(?:(?:qa\s+)?(pass|passed|approved)[\s.!]*|(qa\s+fail(?:ed)?|fail)\b[\s:,.!-]*(.*))",
+                        re.I | re.S)
+URGENT_RE = re.compile(r"\b(urgent|asap|blocker|p0|sev ?1|hotfix)\b", re.I)  # ponytail: keyword urgency, no gate call
+
+
+def qa_owner(text: str, ctx: Ctx) -> str:
+    """Who tests this: a team item "qa owner: <area> → <slug>" whose area is named in the text, else ctx.qa."""
+    words = set(re.findall(r"[a-z0-9-]+", text.lower()))
+    for item in ctx.store.search(f"{text} qa owner", ["team"]):
+        m = QA_OWNER_RE.search(item.text)
+        area = set(re.findall(r"[a-z0-9-]+", m[1].lower())) if m else set()
+        if area and area <= words and ctx.store.profile(m[2].lower()).role != "unknown":
+            return m[2].lower()
+    return ctx.qa
+
+
+def _title(brief: str) -> str:
+    line = next((ln for ln in brief.splitlines() if ln.strip()), "Ready for QA")
+    line = re.sub(r"^[#*\s]*(?:(?:brief|title)\s*:\s*)?|[*\s]+$", "", line, flags=re.I)
+    return line[:80] or "Ready for QA"
+
+
+def _ready_for_qa(msg: Msg, sender: Profile, hits, ctx: Ctx) -> list[Action]:
+    qa = qa_owner(msg.body, ctx)
+    brief = ctx.writer.brief(msg, sender, hits, "ready-for-qa")
+    lines = []  # fixed fields the qa-agent and the ticket read; the branch line is what qa-agent checks out
+    if b := BRANCH_RE.search(msg.body):
+        lines.append(f"branch: {b[1]}")
+    if pr := PR_RE.search(msg.body):
+        lines.append(f"pr: #{pr[1]}")
+    lines += [f"asked by: {sender.slug}", f"qa: {qa}"]
+    return [("file_ticket", {"title": _title(brief), "brief": brief + "\n\n" + "\n".join(lines),
+                             "asker": sender.slug, "qa": qa, "room_id": msg.room_id, "thread_id": _root(msg)})]
+
+
+def _apply_file_ticket(a: dict, client, ctx: Ctx) -> None:
+    t = ctx.tickets.create(a["title"], a["brief"], ["ready-for-qa"])
+    yaml_text = (ctx.workflows_dir / "ready-for-qa.yaml").read_text()
+    room = client.room_from_yaml(yaml_text, {"brief": a["brief"], "asker": a["asker"], "qa": a["qa"],
+                                             "ticket_url": t["url"] if t else "none"})
+    rid = room.get("id") or room.get("room_id")
+    ctx.qa_rooms[rid] = {"qa": a["qa"], "asker": a["asker"], "title": a["title"], "ticket": t and t["number"],
+                         "room_id": a["room_id"], "thread_id": a.get("thread_id")}
+    client.target(rid, a["brief"], names=["qa-agent"])  # by name: the qa role has no holder until kickoff
+    who = f"{ctx.store.profile(a['qa']).name} (QA)"
+    said = (f"Filed #{t['number']} {t['url']} and handed it to {who}." if t
+            else f"No ticket tracker configured; tracking in this thread. Handed it to {who}.")
+    client.post(a["room_id"], said, thread_id=a.get("thread_id"))
+
+
+def _apply_ticket(a: dict, ctx: Ctx) -> None:
+    a = dict(a)
+    getattr(ctx.tickets, a.pop("op"))(**a)
+
+
+def _qa_verdict(msg: Msg, slug: str, ctx: Ctx) -> list[Action] | None:
+    """A pass/fail in a QA room. Counts only from the room's QA person (known profile, not an agent).
+    None: not a verdict, normal rules apply."""
+    v = VERDICT_RE.fullmatch(msg.body.strip())
+    if not v:
+        return None
+    q = ctx.qa_rooms[msg.room_id]
+    if msg.is_agent:
+        return []  # qa-agent's QA PASSED is advice, and no agent decides
+    if slug != q["qa"] or ctx.store.profile(slug).role == "unknown":
+        return [_post(msg, f"only {ctx.store.profile(q['qa']).name} (QA) can pass or fail this")]
+    del ctx.qa_rooms[msg.room_id]  # decided once
+    qa_name, n = ctx.store.profile(slug).name, q["ticket"]
+    ref = f"#{n}" if n else "no ticket"
+    origin = {"room_id": q["room_id"], "thread_id": q["thread_id"]}
+    if v[1]:
+        acts = [("ticket", {"op": "close", "n": n, "comment": f"Verified by {qa_name} (QA)"})] if n else []
+        product = ctx.room_ids.get("product", q["room_id"])
+        return acts + [
+            _post(msg, f"passed; closing {ref}"),
+            ("post", {**origin, "body": ctx.writer.sanitize(f"{q['title']}: verified by {qa_name} (QA), {ref} closed")}),
+            ("target", {"room_id": product, "names": [ctx.pm], "thread_id": None, "body": ctx.writer.sanitize(
+                f"{q['title']} verified by QA, ready for the next release ({ref})")}),
+        ]
+    notes = v[3].strip() or "no notes given"
+    acts = [("ticket", {"op": "comment", "n": n, "body": f"QA failed ({qa_name}): {notes}"}),
+            ("ticket", {"op": "label", "n": n, "add": ["qa-failed"], "remove": ["ready-for-qa"]})] if n else []
+    acts.append(_post(msg, f"failed; sent back to {q['asker']}"))
+    dev = ctx.store.profile(q["asker"])
+    text = ctx.writer.sanitize(f"QA failed {q['title']} ({ref}), from {qa_name}: {notes}")
+    if in_focus(dev, ctx.now()) and not URGENT_RE.search(notes):  # the usual focus hold
+        return acts + [("hold", {"for": dev.slug, "item": {"text": text, **origin}})]
+    return acts + [("target", {**origin, "body": text, "names": [dev.slug]})]
 
 
 ROOM_SLUGS = ["product", "leadership", "eng", "chief-ops"]

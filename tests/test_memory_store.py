@@ -80,7 +80,8 @@ def test_seed_memory_loads():
     assert s.profile("ravi").preapproved == ["mochi_read"]
     assert s.profile("meera").focus == [("10:00", "15:00")]
     assert s.profile("asha").style == "one line and a chart"
-    assert len(s.items("team")) == 2
+    assert s.profile("priya").role == "QA"
+    assert len(s.items("team")) == 3
 
 
 def test_proposal_written_to_team_proposals(store):

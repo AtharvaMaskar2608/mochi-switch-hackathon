@@ -7,13 +7,13 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = sorted((ROOT / "workflows").glob("*.yaml"))
 FILES = sorted((ROOT / "org").glob("*.yaml")) + WORKFLOWS
-WORKFLOW_NAMES = {"data-question", "shipped-digest", "bug-fix-review", "release-train"}
+WORKFLOW_NAMES = {"data-question", "shipped-digest", "bug-fix-review", "release-train", "ready-for-qa"}
 
-PEOPLE = {"asha", "ravi", "meera", "dev"}
+PEOPLE = {"asha", "ravi", "meera", "dev", "priya"}
 AGENTS = {"chief", "mochi-data", "ship", "reviewer", "security", "sre", "designer",
-          "intern-meera", "intern-dev", "standin-data"}
+          "intern-meera", "intern-dev", "standin-data", "qa-agent"}
 ROLES = {"data-steward", "release-scribe", "reviewer", "security", "deployer", "on-call",
-         "release-owner", "video", "intern-meera", "intern-dev"}
+         "release-owner", "video", "intern-meera", "intern-dev", "qa"}
 ROOMS = {"product", "leadership", "eng", "chief-ops"}
 INTERNS = ("intern-meera", "intern-dev")
 
@@ -58,7 +58,7 @@ def test_names_match_global_names_table():
             for role in room.get("roles", []):
                 assert expand(role["name"]) <= ROLES, (p, role["name"])
             for u in room.get("users", []):
-                assert u in PEOPLE or u in ("{asker}", "{$creator}"), (p, u)
+                assert u in PEOPLE or u in ("{asker}", "{qa}", "{$creator}"), (p, u)
             if doc.get("version") != 2:
                 for a in room["agents"]:
                     assert expand(a) <= AGENTS, (p, a)
@@ -106,6 +106,15 @@ def test_kickoff_addresses_exactly_one_role():
 def test_bug_fix_review_end_condition_mentions_asker():
     room = load(ROOT / "workflows" / "bug-fix-review.yaml")["room"]
     assert re.search(r"only \{asker\}.*approve", room["instructions"], re.S | re.I)
+
+
+def test_ready_for_qa_room_has_asker_qa_and_qa_agent():
+    doc = load(ROOT / "workflows" / "ready-for-qa.yaml")
+    room = doc["room"]
+    assert doc["params"]["qa"]["type"] == "user" and "ticket_url" in doc["params"]
+    assert set(room["users"]) == {"{asker}", "{qa}"} and "qa-agent" in room["agents"]
+    assert [r["name"] for r in room["roles"]] == ["qa"]
+    assert re.search(r"only \{qa\} ends it", room["instructions"])
 
 
 def test_release_train_has_no_real_deploy_command():

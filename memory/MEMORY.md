@@ -11,6 +11,9 @@
 ## meera
 
 
+## priya
+
+
 ## ravi
 
 
@@ -18,3 +21,4 @@
 
 - Owners: refunds code is meera; payments is dev; data questions go to ravi via Mochi. ([fact](team/items/m_0a11e001.md), added 2026-11-07)
 - Glossary: GMV is gross merchandise value before refunds; AOV is average order value; a refund-queue ticket is tagged Refunds. ([definition](team/items/m_0a11e002.md), added 2026-11-07)
+- qa owner: refunds → priya ([fact](team/items/m_0a11e003.md), added 2026-11-07)

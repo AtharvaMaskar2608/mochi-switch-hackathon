@@ -76,11 +76,12 @@ cd "$ROOT"
 uv sync -q
 SWITCH_DIR="$SWITCH_DIR" uv run python scripts/setup_demo.py
 
-# --- Chief and the stand-in data agent ------------------------------------------------
+# --- Chief, the stand-in data agent and the QA agent ------------------------------------------------
 (
-  set -a; . ./.env; set +a  # the project keys, for these two processes only
+  set -a; . ./.env; set +a  # the project keys, for these processes only
   export SWITCH_URL=$API CHIEF_DATA_AGENT=standin-data
   start standin-data uv run python -m connectors.standin_data
+  start qa-agent uv run python -m connectors.qa
   start chief uv run chief
 )
 
