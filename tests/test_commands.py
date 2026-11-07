@@ -53,3 +53,12 @@ def test_forget_ignores_stopword_only_overlap():
 
     assert forget_target(Store(), "meera", "forget the is at") is None
     assert forget_target(Store(), "meera", "the standup") is None  # one real word is not enough
+
+
+def test_addressed_commands_skip_the_bang_switch_bridges_eat():
+    assert parse("@chief tick dream") == Command("tick", "dream")
+    assert parse("chief, !tick evening") == Command("tick", "evening")
+    assert parse("@chief memory") == Command("memory", "")
+    assert parse("@chief quiet off") == Command("quiet_off", "")
+    assert parse("@chief approve k7qx") == Command("approve", "K7QX")
+    assert parse("tick dream") is None and parse("memory") is None  # unaddressed: still needs the "!"

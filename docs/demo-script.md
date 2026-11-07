@@ -6,7 +6,7 @@
 - Re-seed Mochi right before recording, because the refunds spike is anchored to the seed time: in `/Users/choice/projects/mochi-ai-switch`, run `pnpm --filter data-mcp seed`.
 - Publish `brightcart-shop` with `sample/make_shop_repo.sh`. It plants bug BC-142 (refund rounding) and `requests==2.19.1`.
 - Set `release_owner = meera` and `org_admin = asha`, which are the defaults.
-- Run `!tick dream` in `#chief-ops` now, off camera. The dreamer holds Chief while it runs, so it never goes on camera. Its "What I learned" note stays in `#chief-ops` for the memory shot.
+- Run `!tick dream` (on Mattermost: `@chief tick dream`, since its bridge eats `!` commands) in `#chief-ops` now, off camera. The dreamer holds Chief while it runs, so it never goes on camera. Its "What I learned" note stays in `#chief-ops` for the memory shot.
 - Chief uses the real clock (IST). Record between 10:00 and 15:00 IST, or temporarily set `focus:` in `memory/people/meera/profile.md` to a block that covers the recording.
 - On Slack, start Chief with `CHIEF_LOG=DEBUG` and grep its log for `identity:` to check one message's `sender_name`. Approvals key on it, and it must be the username (`meera`), not a display name.
 - Open `#chief-ops` in a spare tab so you can fire ticks by hand.

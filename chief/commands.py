@@ -10,14 +10,18 @@ class Command:
 
 def parse(body: str) -> Command | None:
     t = body.strip()
-    low = t.lower()
-    if low == "!memory":
+    # Switch's chat bridges eat a leading "!word" as their own command, so "@chief tick dream" works too
+    lead = re.match(r"(?:hey\s+)?@?chief[\s,:]+", t, re.I)
+    t = t[lead.end():] if lead else t
+    low = t.lower().removeprefix("!") if lead else t.lower()
+    bang = "" if lead else "!"
+    if low == bang + "memory":
         return Command("memory")
-    if low == "!quiet":
+    if low == bang + "quiet":
         return Command("quiet_on")
-    if low == "!quiet off":
+    if low == bang + "quiet off":
         return Command("quiet_off")
-    if m := re.fullmatch(r"!tick\s+(\S+)", low):
+    if m := re.fullmatch(bang + r"tick\s+(\S+)", low):
         return Command("tick", m[1])
     if m := re.match(r"(?:chief\s+)?remember\s+(.+)", t, re.I | re.S):
         return Command("remember", m[1].strip())
