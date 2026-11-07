@@ -31,7 +31,7 @@
 - A message counts as addressed to Chief if it @-mentions Chief, or starts with "chief" or "hey chief". Only an addressed message is split into several jobs (up to 3).
 - The focus hold runs before Chief checks whether a message is for it, so person-to-person pings like Dev's are held without addressing Chief. Only pings below "within the hour" are held.
 - Ask for releases from `#eng`. Meera is in `#eng`, so the second approval request reaches her there.
-- For the QA shot, set `TICKETS_REPO` in `.env` (the repo whose Issues tab you show) and run `qa-agent` (`uv run python -m connectors.qa`; `up.sh` starts it). Priya needs a Switch user and linked account (`scripts/setup_demo.py` adds her). Without `TICKETS_REPO` the flow still runs, with no ticket.
+- For the QA shot, set `TICKETS_REPO` in `.env` (the repo whose Issues tab you show) and run `qa-agent` (`uv run python -m connectors.qa`; `up.sh` starts it). Priya needs a Switch user and linked account (`scripts/setup_demo.py` adds her). Without `TICKETS_REPO` the flow still runs, with no ticket. For a `QA FAILED` take, use branch `fix/refund-rounding` (a wrong BC-142 fix; its test really fails), then `qa fail <steps>` as Priya.
 - Approval codes are 4 characters and only work once. Read them off the screen.
 - Before the org-factory shot, check that the factory can list existing agents on this server. If it can't, it refuses (fails closed) and the shot fails.
 - The judge path is Mattermost with the stand-in data agent. It answers with a table only and no Mochi artifact link, so the video uses real Mochi.

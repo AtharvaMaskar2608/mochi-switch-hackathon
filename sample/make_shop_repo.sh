@@ -3,6 +3,7 @@
 #   --local <dir>      build history locally (no network, no remote)
 #   --publish <owner> [--private]   create GitHub repo, push, open+merge 3 PRs (asks first)
 # Planted: BC-142 rounding bug in refunds.py (xfail test), requests==2.19.1 (known CVEs).
+# --local only: unmerged branch fix/refund-rounding, a wrong BC-142 fix whose test fails (QA FAILED demo).
 set -euo pipefail
 
 export GIT_AUTHOR_NAME="Asha Rao" GIT_AUTHOR_EMAIL="asha@brightcart.example"
@@ -100,7 +101,15 @@ local_build() {
     at $((3 - i)); git merge -q --no-ff "${PR_BRANCHES[$i]}" -m "Merge PR #$((i + 1)): ${PR_TITLES[$i]}"
   done
   at 1; git tag -a v1.4.1 -m "v1.4.1"
+  qa_fail_branch; git checkout -q main
 }
+
+qa_fail_branch() { # unmerged, for the QA demo: a wrong BC-142 fix whose test now really fails
+  git checkout -q -b fix/refund-rounding main
+  sed -i.bak 's|    return round(paid \* percent / 100)|    return paid * percent // 100  # floors: 12.5 -> 12, still wrong|' refunds.py
+  sed -i.bak '/@pytest.mark.xfail(reason="known bug BC-142")/d' tests/test_refunds.py
+  rm -f refunds.py.bak tests/test_refunds.py.bak
+  at 0; commit "BC-142: fix partial refund rounding"; }
 
 publish() {
   local owner="$1" vis="${2:---public}" repo="$1/brightcart-shop"

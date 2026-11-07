@@ -59,6 +59,17 @@ def test_ready_for_qa_files_ticket_and_opens_room(qctx):
     assert qctx.qa_rooms["W1"]["qa"] == "priya" and qctx.qa_rooms["W1"]["ticket"] == 12
 
 
+def test_qa_room_failure_says_so_in_thread(qctx):
+    class Broken(FakeClient):
+        def room_from_yaml(self, yaml, inputs):
+            raise RuntimeError("400")
+    c = Broken()
+    apply(handle(msg(READY, sender="dev", room="E", room_name="eng", addressed=True), qctx), c, qctx)
+    assert c.log == [("post", "E", "Filed #12 https://github.com/o/r/issues/12, but I couldn't open a ready-for-qa "
+                                   "room (Switch said RuntimeError); qa-agent may not be running")]
+    assert qctx.qa_rooms == {}
+
+
 def test_only_qa_person_can_pass_or_fail(qctx):
     handed_off(qctx)
     refused = handle(msg("pass", sender="dev", room="W1"), qctx)

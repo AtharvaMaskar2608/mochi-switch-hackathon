@@ -249,7 +249,7 @@ def profile_slug(sender_name: str) -> str:
     """Profile folder name for a sender; anything that isn't a plain slug reads as the unknown profile."""
     s = sender_name.lower()
     return s if SLUG_RE.fullmatch(s) else "unknown"
-VISIBLE = {"post", "target", "approval", "open_work_room"}
+VISIBLE = {"post", "target", "approval", "open_work_room", "file_ticket"}
 
 
 def spoken_to(body: str, name: str = "chief") -> bool:
@@ -489,8 +489,15 @@ def _ready_for_qa(msg: Msg, sender: Profile, hits, ctx: Ctx) -> list[Action]:
 def _apply_file_ticket(a: dict, client, ctx: Ctx) -> None:
     t = ctx.tickets.create(a["title"], a["brief"], ["ready-for-qa"])
     yaml_text = (ctx.workflows_dir / "ready-for-qa.yaml").read_text()
-    room = client.room_from_yaml(yaml_text, {"brief": a["brief"], "asker": a["asker"], "qa": a["qa"],
-                                             "ticket_url": t["url"] if t else "none"})
+    try:
+        room = client.room_from_yaml(yaml_text, {"brief": a["brief"], "asker": a["asker"], "qa": a["qa"],
+                                                 "ticket_url": t["url"] if t else "none"})
+    except Exception as e:  # same notice as open_work_room: say so in the thread, don't go quiet
+        code = getattr(getattr(e, "response", None), "status_code", type(e).__name__)
+        filed = f"Filed #{t['number']} {t['url']}, but I " if t else "I "
+        client.post(a["room_id"], f"{filed}couldn't open a ready-for-qa room (Switch said {code}); "
+                    "qa-agent may not be running", thread_id=a.get("thread_id"))
+        raise
     rid = room.get("id") or room.get("room_id")
     ctx.qa_rooms[rid] = {"qa": a["qa"], "asker": a["asker"], "title": a["title"], "ticket": t and t["number"],
                          "room_id": a["room_id"], "thread_id": a.get("thread_id")}
