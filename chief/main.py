@@ -85,7 +85,7 @@ class Ctx:
 
 
 def _post(msg: Msg, body: str) -> Action:
-    return ("post", {"room_id": msg.room_id, "body": body, "thread_id": msg.thread_id})
+    return ("post", {"room_id": msg.room_id, "body": body, "thread_id": _root(msg)})
 
 
 def _root(msg: Msg) -> str | None:
@@ -278,6 +278,9 @@ def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
     if len(parts) == 1:
         return _capped(_decide(msg, slug, ctx), msg, ctx)
     results = [_decide(replace(msg, body=part), slug, ctx) for part in parts]  # each: its own gate and ladder
+    rooms = [a["template"] for acts in results for k, a in acts if k == "open_work_room"]
+    if len(rooms) != len(set(rooms)):  # two parts of one question ("where is X and what did it do"): one job
+        return _capped(_decide(msg, slug, ctx), msg, ctx)
     acting = [part for part, acts in zip(parts, results) if any(k in VISIBLE for k, _ in acts)]
     out = [a for acts in results for a in acts if a[0] != "none"]
     if len(acting) >= 2:  # the summary only when it says something the replies don't
