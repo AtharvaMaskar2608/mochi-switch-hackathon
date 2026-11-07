@@ -46,10 +46,13 @@ PROFILE = {
     "task_protocol": {"can_delegate": False, "can_accept": False},
 }
 
-r = httpx.post(f"{base_url}/agents",
-               headers={"Authorization": f"Bearer {registration_token}"},
-               json={"name": name, "description": description, "connector_type": "e2e",
-                     "integration_profile": PROFILE})
+r = httpx.post(
+    f"{base_url.rstrip('/')}/agents",
+    headers={"Authorization": f"Bearer {registration_token}"},
+    json={"name": name, "description": description, "connector_type": "e2e",
+          "integration_profile": PROFILE},
+    timeout=120,  # registration provisions chat bot accounts; slow on a cold server
+)
 ```
 
 Then it opens a server-sent event stream. The one parameter that makes Chief proactive is `filter=all`: you get every message in your rooms, not only the ones addressed to you.
@@ -71,13 +74,17 @@ Acting is just operations: `POST /agents/{id}/ops/{name}`. Chief only uses a few
 
 ```python
 self.op("post_message", body=body, thread_id=thread_id)
-self.op("send_targeted_message", body=body, target_names=names, target_roles=roles, thread_id=thread_id)
+self.op("send_targeted_message", body=body, target_names=names,
+        target_roles=roles, thread_id=thread_id)
 self.op("read_context", limit=limit)
 self.op("create_room_from_yaml", yaml=yaml, inputs=inputs)
-self.op("create_room_document", name=name, description=name, instructions="Maintained by Chief.", content=content)
+self.op("create_room_document", name=name, description=name,
+        instructions="Maintained by Chief.", content=content)
 ```
 
-`target_roles` is the important one. Chief never says "hey mochi-data". It addresses `data-steward`, and whoever holds that role in the room picks it up.
+`target_roles` is the important one. In most work rooms Chief never names a bot. It addresses `release-scribe` or `reviewer`, and whoever holds that role in the room picks it up. The one exception is the data question: the `data-steward` role has no holder until the data agent takes it at kickoff, so Chief targets that agent by name (`mochi-data`, or `standin-data` on the judge path).
+
+Switch decides whether a message is addressed to you from its @-mentions. A message dictated by voice ("Hey chief, …") has none, so Chief also counts a person's message that starts with "chief" or "hey chief" as addressed to it.
 
 ## Step 3: the org as a template
 
@@ -136,11 +143,16 @@ params:
   asker:
     type: user
     label: Asker
+  data_agent:
+    type: agent
+    label: Data agent
+    description: The agent that answers data questions (mochi-data, or standin-data on the judge path).
+    default: mochi-data
 room:
   name: work-data-question-{$timestamp}
   description: A data question for the data-steward.
   channel_type: channel_private
-  agents: [mochi-data, chief]
+  agents: ["{data_agent}", chief]
   users: ["{asker}"]
   roles:
     - name: data-steward
@@ -152,20 +164,22 @@ room:
     {brief}
 
     Steps:
-    1. The data-steward (mochi-data) answers in this thread: one line, a table, the Mochi artifact link, and the query.
+    1. The data-steward ({data_agent}) answers in this thread: one line, a table, the Mochi artifact link, and the query.
     2. The data-steward posts DONE on its own line. That ends the work. It does not @ anyone.
     3. Chief then restyles the answer for {asker} in the thread the question came from.
 kickoff: |
-  @mochi-data take the data-steward role. Read the brief in the room instructions and answer it as your CLAUDE.md says. Post DONE when finished.
+  @{data_agent} take the data-steward role. Read the brief in the room instructions and answer it as your CLAUDE.md says. Post DONE when finished.
 ```
 
-When Chief decides a message is a data question, it does three things. It writes a brief with Claude (who asked, why, what they already know, the format they like). It calls `create_room_from_yaml` with `{brief, asker}`. Then it addresses the lead role in the new room. The specialist never sees the chat history of other rooms. It gets one self-contained brief in the room instructions.
+When Chief decides a message is a data question, it does three things. It writes a brief with Claude (who asked, why, what they already know, the format they like). It calls `create_room_from_yaml` with `{brief, asker, data_agent}`. Then it addresses the data agent in the new room. The specialist never sees the chat history of other rooms. It gets one self-contained brief in the room instructions.
+
+When the room's lead posts its answer (a `DONE`, a table, or a long reply), Chief restyles it for the asker and posts it once in the thread the question came from. The asker never has to open the work room.
 
 The other templates use the same pattern:
 
-- `shipped-digest`: `ship` writes from GitHub, then hands over to `designer` for a one-minute video.
-- `bug-fix-review`: built on Switch's red-blue workroom example. The intern fixes, the reviewer pushes back, and only the asker ends the loop.
-- `release-train`: reviewer, then the security gate, then release notes, then a dry run.
+- `shipped-digest`: `ship` writes from GitHub. If the brief mentions a video, Chief adds an explicit hand-off, and `ship` passes the digest to `designer` for a one-minute video.
+- `bug-fix-review`: built on Switch's red-blue workroom example. The intern fixes, the reviewer pushes back, and only the asker ends the loop by asking to merge. The intern merges only when Chief posts `merge approved by <developer>`, after that developer's approval.
+- `release-train`: reviewer, then the security gate, then release notes with `services: N` and `migrations: M` lines, then `ship` addresses `@chief`. Chief asks the release owner to approve (the second approval: the first came before the room opened), and then posts the dry-run line in the room and in the requesting thread: "would deploy v1.4.2 to staging: 3 services, 1 migration".
 
 Switch's task protocol for delegation isn't finished yet, so each template's instructions say which role to address next. That turned out to be a fine stand-in.
 
@@ -178,7 +192,9 @@ Chief sees every message, so the per-message decision has to be cheap and fast. 
 - `template` plus `fits` (choice and yes/no)
 - `urgency` (score)
 
-Jev only ever *suggests*. Code decides what is allowed.
+Jev is optional, though preferred. Without `TYPESAFE_API_KEY`, Chief asks `claude-haiku-5-5` the same four questions and parses one JSON answer, so only `ANTHROPIC_API_KEY` is required. Either gate only ever *suggests*. Code decides what is allowed, and the same ceiling applies to both.
+
+There is one exception to "one call per message". When someone addresses Chief with several requests at once ("what shipped, make it a video, and why did refunds jump?"), Claude splits the message into at most 3 parts, and each part gets its own gate call. Chief replies "On it, 2 jobs: …" and runs each one. A message that isn't addressed to Chief always gets exactly one call.
 
 ## Step 6: guardrails in code, not in the prompt
 
@@ -201,13 +217,15 @@ def final_rung(d: Decision, action: str, sender: Profile) -> Rung:
 
 The approver is chosen in code too. A merge goes to the person who asked for the work room, a deploy to the release owner, and creating agents to the org admin. Chief posts a one-time 4-character code and only accepts `approve CODE` from that person.
 
+Below the hard list there is a softer step. When Chief isn't sure, it offers in one line and names the workflow it would run. If the same person replies "yes" in that thread within 30 minutes, Chief runs it. A yes can never stand in for an approval: an offer never names a hard-listed action.
+
 Lean on what Switch already enforces. Interns run with `auto_mode: false`, so Switch shows its own approval cards for their risky tool calls. The addressing policy stops anyone outside the owner's side from driving a specialist.
 
 Other small rules make Chief pleasant to have around:
 
 - At most 3 unprompted posts per room per hour.
 - `!quiet` silences it in a room.
-- A non-urgent ping to someone in focus time is held and delivered as one batched brief when their block ends.
+- A ping to someone in focus time that can wait (below "within the hour") is held, even if it was chat between people and not for Chief. Chief tells the asker in their thread, "Meera is heads-down until 15:00; I'll pass this on", and adds anything memory already knows. When her block ends (or on the `evening` tick), she gets one batched brief per room.
 
 ## Step 7: memory people can read
 
@@ -233,15 +251,15 @@ Owners: refunds code is meera; payments is dev; data questions go to ravi via Mo
 
 Profiles live next to the items. Ravi's says `style: tables and definitions` and `preapproved: [mochi_read]`, and Meera's says `focus: ["10:00-15:00"]`. Those lines are why the same answer comes back as a table for Ravi and as one line for Asha.
 
-A nightly **dreamer** reads each room with `read_context` and pulls out durable facts and preferences. It dedups them against existing items, tidies each person's memory, and proposes team knowledge when three or more people have learned the same lesson. It commits `memory/` and publishes the team items into each room as a **room document** called "Team knowledge", so every agent in that room can read it. One rule: **person edits win**. The dreamer never touches an item marked `edited_by_person`. I ported its prompts from the memory system in Mochi, my data product. They were already tuned for "what is worth remembering", and that is the hard part.
+A nightly **dreamer** reads each room with `read_context` and pulls out durable facts and preferences. It dedups them against existing items, tidies each person's memory, and proposes team knowledge when three or more people have learned the same lesson. It commits `memory/` and publishes the team items into each room as a **room document** called "Chief: team knowledge", so every agent in that room can read it. One rule: **person edits win**. The dreamer never touches an item marked `edited_by_person`. I ported its prompts from the memory system in Mochi, my data product. They were already tuned for "what is worth remembering", and that is the hard part.
 
 ## Step 8: bring your own agents
 
 Not every agent has to be Claude Code. `connectors/base.py` is about 90 lines. It registers a custom agent, listens for messages addressed to it, runs a handler in a thread (posting "working on it" if the job is slow), and replies in the thread, by role if needed. Three connectors use it:
 
 - `standin_data`: a SQLite stand-in for Mochi, so anyone can reproduce the demo. It enforces read-only SELECTs, and an authorizer masks the PII columns.
-- `security`: runs a scanner and gates on severity in code. It posts `BLOCKED` back to the intern or `PASSED` on to the release scribe.
-- `designer`: bridges to a video and design agent over HTTP.
+- `security`: runs a scanner and gates on severity in code. It posts `PASSED` on to the release scribe, or `BLOCKED`, which stops the train in the room. (It sends findings to an intern only when the message names an `owner:`.)
+- `designer`: bridges to a video and design agent over HTTP. It waits for the update that names an output file, and posts the file as a local path.
 
 ## What I would tell a first-time Switch user
 
@@ -251,4 +269,4 @@ Not every agent has to be Claude Code. `connectors/base.py` is about 90 lines. I
 4. **Put every brief in the room instructions.** Agents arrive with no context, and the instructions are the one place they all read.
 5. **Keep authority in code and in Switch's own policies.** Let the model choose a path, never the permission.
 
-The code is in this repo. `scripts/up.sh` brings up Switch with Mattermost, the Brightcart org, Chief and the connectors. You need two keys: `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY`.
+The code is in this repo. `scripts/up.sh` brings up Switch (pinned to the commit I tested) with Mattermost and the Brightcart org, then starts Chief and the stand-in data agent. The other specialists need a Switch Console machine, so on a laptop they are skipped. Only `ANTHROPIC_API_KEY` is required; add `TYPESAFE_API_KEY` to gate with Jev.
