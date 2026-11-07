@@ -13,6 +13,8 @@
 
 ## ravi
 
+- Refunds data lives in the tickets table of the support warehouse, filtered to queue = Refunds. ([fact](people/ravi/items/m_074d360a.md), added 2026-11-07)
+- The person always wants refund numbers expressed as a rate of GMV, not as raw counts. ([preference](people/ravi/items/m_d7236f3f.md), added 2026-11-07)
 
 ## team
 
