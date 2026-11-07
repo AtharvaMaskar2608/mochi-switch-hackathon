@@ -18,7 +18,7 @@ def test_parse_env_skips_comments_and_strips_quotes():
 def test_merge_people_keeps_saved_passwords_and_fills_new_ones():
     out = sd.merge_people({"ravi": {"username": "ravi", "email": "r@x", "password": "keep", "mm_id": "m"}})
     assert out["ravi"] == {"username": "ravi", "email": "r@x", "password": "keep", "mm_id": "m"}
-    assert set(out) == {"asha", "ravi", "meera", "dev"}
+    assert set(out) == {"asha", "ravi", "meera", "dev", "priya"}
     assert out["asha"]["email"] == "asha@brightcart.test" and len(out["asha"]["password"]) > 20
     assert out["asha"]["password"] != out["dev"]["password"]
 

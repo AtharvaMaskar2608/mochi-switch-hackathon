@@ -22,6 +22,7 @@ marker() {
   case $1 in
     chief) echo '(^|[ /])chief( |$)' ;;
     standin-data) echo 'connectors\.standin_data' ;;
+    qa-agent) echo 'connectors\.qa' ;;
     switch) echo 'switch_core\.main' ;;
   esac
 }

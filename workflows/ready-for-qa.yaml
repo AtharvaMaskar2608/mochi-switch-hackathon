@@ -1,0 +1,43 @@
+# Ready for QA: a developer hands a fix to QA. qa-agent runs the tests (advisory); only the QA person passes or fails it.
+# Chief's file_ticket action loads this and passes inputs {brief, asker, qa, ticket_url}.
+version: 1
+params:
+  brief:
+    type: string
+    multiline: true
+    label: Handoff brief
+    description: What was built, the branch or PR, and how to test it.
+  asker:
+    type: user
+    label: Asker (the developer)
+  qa:
+    type: user
+    label: QA owner
+  ticket_url:
+    type: string
+    label: Ticket
+    description: The GitHub issue for this handoff, or "none".
+    default: none
+room:
+  name: work-ready-for-qa-{$timestamp}
+  description: "{asker} hands a fix to {qa} for QA; qa-agent runs the tests, {qa} decides."
+  channel_type: channel_private
+  agents: [qa-agent, chief]
+  users: ["{asker}", "{qa}"]
+  roles:
+    - name: qa
+      instructions: Check out the branch in the brief, run the tests, and post QA PASSED or QA FAILED with the failing test names. Advisory only.
+  instructions: |
+    QA handoff from {asker} to {qa}. Ticket: {ticket_url}
+
+    Brief:
+    {brief}
+
+    Steps:
+    1. qa-agent checks out the branch and runs the tests, then posts QA PASSED or QA FAILED. That result is advice.
+    2. {qa} tests it and decides by posting "qa pass" or "qa fail <what failed, steps to reproduce>".
+
+    End condition: only {qa} ends it. Nobody else's pass or fail counts, and an agent's never does.
+    On pass Chief closes the ticket and tells the PM; on fail Chief comments on the ticket and routes it back to {asker}.
+kickoff: |
+  @qa-agent take the qa role. Wait for the brief, then check out its branch and run the tests.
