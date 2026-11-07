@@ -25,15 +25,21 @@ def handle(msg: Msg, transport: httpx.BaseTransport | None = None, poll_s: float
         out = r.json()
         text, names, working, after = out["reply"], list(out["files"]), out["working"], 0
         deadline = time.monotonic() + cap_s
-        while working:  # the last update is the final reply
+        while working:
             if time.monotonic() > deadline:
                 return Reply("designer timed out after 15 minutes; check design-agent")
             time.sleep(poll_s)
             u = c.get(f"/threads/{tid}/updates", params={"after": after}).json()
             after = u["cursor"]
-            if u["updates"]:
-                text = u["updates"][-1]
-                names += FILE_RE.findall(text)
+            # design-agent's updates carry no "final" marker (surfaces/api/app.py): progress notes come first,
+            # the update naming an output file is the delivery. A status field ends it too, should one be sent.
+            for update in u["updates"]:
+                text = update
+                if found := FILE_RE.findall(update):
+                    names += found
+                    working = False
+                    break
+            if u.get("status") in ("idle", "complete"):
                 working = False
         d = out_dir or Path(tempfile.mkdtemp(prefix="designer-"))
         files = []

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from chief.models import Msg
+from chief.writer import thinking_off
 
 try:
     from connectors.base import Reply
@@ -87,7 +88,7 @@ def handle(msg: Msg, client=None) -> Reply:
     r = client.messages.create(
         model=MODEL,
         max_tokens=600,
-        thinking={"type": "disabled"},  # else thinking can eat the whole budget and no SQL comes back
+        thinking=thinking_off(MODEL),  # else thinking can eat the whole budget and no SQL comes back
         system=(f"You turn a data request into ONE SQLite SELECT over this schema: {SCHEMA}. The query is run "
                 "for you. Reply with the SQL only: no prose, no caveats. The request may be a long brief; answer "
                 "its main data question."),

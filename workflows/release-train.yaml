@@ -21,7 +21,7 @@ room:
     - name: security
       instructions: Run the security code gate, then address @ship if PASSED.
     - name: release-scribe
-      instructions: Write the release notes, then address @chief.
+      instructions: "Write the release notes: the version (vX.Y.Z), then a line `services: N` and a line `migrations: M`, then address @chief."
     - name: release-owner
       exclusive: true
       instructions: Approves the release before the dry run.
@@ -36,7 +36,7 @@ room:
     Steps, in order. Each agent addresses the next one by name when its step is done:
     1. reviewer reviews the release range. When ready, it addresses @security. If it blocks, it says why and addresses nobody.
     2. security runs the code gate. On PASSED it addresses @ship. On FAILED it says why and addresses nobody.
-    3. ship (release-scribe) writes the release notes, then addresses @chief.
+    3. ship (release-scribe) writes the release notes, then addresses @chief. The notes state the version (vX.Y.Z) and include a line `services: N` and a line `migrations: M` (the counts in the release range).
     4. chief asks the release-owner for approval and waits for it.
     5. After approval, chief posts the dry-run line: "would deploy vX to staging: N services, M migrations". Nothing is deployed and no deploy command is run.
 

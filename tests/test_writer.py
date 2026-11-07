@@ -19,6 +19,27 @@ class Fake:
         return NS(content=[NS(type="text", text=self.reply)])
 
 
+def test_thinking_off_is_chosen_per_model():
+    assert writer.thinking_off(writer.SONNET) == {"type": "between_tools"}  # sonnet 400s on "disabled"
+    assert writer.thinking_off(writer.HAIKU) == {"type": "disabled"}
+    c = Fake("ok")
+    writer.brief(MSG, RAVI, [], "t", client=c)  # sonnet
+    writer.restyle("a", RAVI, client=c)  # haiku
+    assert [k["thinking"] for k in c.calls] == [{"type": "between_tools"}, {"type": "disabled"}]
+
+
+def test_factory_gate_and_standin_send_the_models_thinking_param():
+    from chief import factory, gate
+    from connectors import standin_data
+
+    c = Fake('{"team": "growth", "people": [], "for_me": "yes", "rung": "act", "template": "none", '
+             '"fits": "no", "urgency": 0}')
+    factory.spec_from_text("growth team", client=c)
+    gate.decide_with_claude(MSG, RAVI, False, [], [], client=c)
+    assert [k["thinking"] for k in c.calls] == [{"type": "between_tools"}, {"type": "disabled"}]
+    assert standin_data.MODEL == writer.HAIKU
+
+
 def test_sanitize_strips_mentions():
     assert "@" not in writer.sanitize("ask @ship now")
 

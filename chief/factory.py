@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from chief.writer import SONNET, sanitize
+from chief.writer import SONNET, sanitize, thinking_off
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -42,6 +42,7 @@ def spec_from_text(text: str, client=None) -> TeamSpec:
     r = client.messages.create(
         model=SONNET,
         max_tokens=600,
+        thinking=thinking_off(SONNET),
         system=(
             "Turn the team description into JSON only, no prose: "
             '{"team": lowercase slug, "people": [{"name": lowercase first name, "role": "dev" or another role '
