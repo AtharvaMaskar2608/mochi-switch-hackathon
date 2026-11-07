@@ -381,7 +381,13 @@ def _apply_one(kind: str, a: dict, client, ctx: Ctx) -> None:
         if "data_agent" in (yaml.safe_load(yaml_text).get("params") or {}):
             inputs["data_agent"] = ctx.data_agent
             names = [ctx.data_agent]  # by name: the role has no holder until the agent assumes it at kickoff
-        room = client.room_from_yaml(yaml_text, inputs)
+        try:
+            room = client.room_from_yaml(yaml_text, inputs)
+        except Exception as e:  # e.g. 400 when a workflow's agents aren't running here: say so, don't go quiet
+            code = getattr(getattr(e, "response", None), "status_code", type(e).__name__)
+            client.post(a["room_id"], f"couldn't open a {a['template']} room (Switch said {code}); "
+                        "its agents may not be running", thread_id=a.get("thread_id"))
+            raise
         rid = room.get("id") or room.get("room_id")
         ctx.work_rooms[rid] = a["asker"]
         lead = LEAD_AGENT.get(a["template"])
