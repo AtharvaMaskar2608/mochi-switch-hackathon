@@ -75,6 +75,36 @@ def test_designer_polls_until_final(tmp_path):
     assert r.text == "done: all-hands.mp4" and r.files[0].read_bytes() == b"vid" and n["u"] == 2
 
 
+def _designer_server(batches):
+    def h(req):
+        p = req.url.path
+        if p.endswith("/messages"):
+            return httpx.Response(200, json={"reply": "on it", "files": [], "working": True})
+        if p.endswith("/updates"):
+            return httpx.Response(200, json=batches.pop(0) if batches else {"updates": ["rendering"], "cursor": 9})
+        return httpx.Response(200, content=b"vid")
+    return httpx.MockTransport(h)
+
+
+def test_designer_progress_update_is_not_final(tmp_path):
+    batches = [{"updates": ["rendering scene 1 of 3"], "cursor": 1}, {"updates": [], "cursor": 1},
+               {"updates": ["still rendering", "done: launch.mp4"], "cursor": 3}]
+    r = designer.handle(msg("video"), transport=_designer_server(batches), poll_s=0, out_dir=tmp_path)
+    assert r.text == "done: launch.mp4" and [f.name for f in r.files] == ["launch.mp4"] and batches == []
+
+
+def test_designer_status_idle_ends_without_files(tmp_path):
+    batches = [{"updates": ["couldn't render that"], "cursor": 1, "status": "idle"}]
+    r = designer.handle(msg("video"), transport=_designer_server(batches), poll_s=0, out_dir=tmp_path)
+    assert r.text == "couldn't render that" and r.files == []
+
+
+def test_designer_keeps_15_minute_cap(tmp_path):
+    assert designer.CAP_S == 15 * 60
+    r = designer.handle(msg("video"), transport=_designer_server([]), poll_s=0, cap_s=-1, out_dir=tmp_path)
+    assert "timed out after 15 minutes" in r.text
+
+
 def test_connector_ignores_unaddressed():
     c = FakeClient([msg(addressed=False)])
     run_connector("x", lambda m: Reply("no"), [], client=c, once=True)
