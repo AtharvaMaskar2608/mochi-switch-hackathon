@@ -58,7 +58,7 @@ def handed_off(qctx, sender="dev", body=READY):
 def test_ready_for_qa_files_ticket_and_opens_room(qctx):
     c = handed_off(qctx)
     (_, title, body, labels), = qctx.tickets.calls
-    assert labels == ["ready-for-qa"] and title == "brief for ready-for-qa from dev"
+    assert labels == ["ready-for-qa"] and title == "Ready for QA: the refunds rounding fix on fix/bc-142-rounding"
     assert "branch: fix/bc-142-rounding" in body and "asked by: dev" in body and "qa: priya" in body
     assert c.log[0] == ("room_from_yaml", "name: ready-for-qa\n", {"brief": body, "asker": "dev", "qa": "priya",
                                                                    "ticket_url": "https://github.com/o/r/issues/12"})
@@ -93,8 +93,8 @@ def test_qa_pass_closes_ticket_and_tells_pm(qctx):
     c = FakeClient()
     apply(handle(msg("qa pass", sender="priya", room="W1"), qctx), c, qctx)
     assert qctx.tickets.calls[-1] == ("close", 12, "Verified by Priya (QA)")
-    assert ("post", "E", "brief for ready-for-qa from dev: verified by Priya (QA), #12 closed") in c.log
-    assert ("target", "P", "brief for ready-for-qa from dev verified by QA, ready for the next release (#12)",
+    assert ("post", "E", "the refunds rounding fix on fix/bc-142-rounding: verified by Priya (QA), #12 closed") in c.log
+    assert ("target", "P", "the refunds rounding fix on fix/bc-142-rounding verified by QA, ready for the next release (#12)",
             ["ravi"], None) in c.log
     assert "W1" not in qctx.qa_rooms
     assert handle(msg("pass", sender="priya", room="W1"), qctx) != []  # spent: now an ordinary message
@@ -106,7 +106,7 @@ def test_qa_fail_comments_relabels_and_routes_to_dev(qctx):
     apply(handle(msg("qa fail 25 paise at 50% refunds 12, expected 13", sender="priya", room="W1"), qctx), c, qctx)
     assert qctx.tickets.calls[1:] == [("comment", 12, "QA failed (Priya): 25 paise at 50% refunds 12, expected 13"),
                                       ("label", 12, ["qa-failed"], ["ready-for-qa"])]
-    assert ("target", "E", "QA failed brief for ready-for-qa from dev (#12), from Priya: "
+    assert ("target", "E", "QA failed the refunds rounding fix on fix/bc-142-rounding (#12), from Priya: "
             "25 paise at 50% refunds 12, expected 13", ["dev"], None) in c.log
 
 
@@ -229,7 +229,7 @@ def test_model_brief_cannot_choose_the_branch(qctx, tmp_path):
     body = c.log[1][2]  # what qa-agent receives
     assert body.splitlines()[:3] == ["branch: fix/bc-142-rounding", "asked by: dev", "qa: priya"]
     assert "none" not in body and "main" not in body and "qa: dev" not in body
-    assert "Test 25 paise at 50%." in body and qctx.tickets.calls[0][1] == "QA: refunds rounding"
+    assert "Test 25 paise at 50%." in body and "QA: refunds rounding" in qctx.tickets.calls[0][2]
     (tmp_path / ".git").mkdir()
     run = fake_repo_run(0)
     qa.handle(qa_msg(body), run=run, repo=tmp_path)
@@ -308,3 +308,18 @@ def test_labels_created_once_and_body_capped(monkeypatch):
     assert sum(c[1] == "label" for c in run.calls) == 2  # ready-for-qa + brightcart, once each
     first = next(c for c in run.calls if c[1] == "issue")
     assert len(first[first.index("--body") + 1]) == tickets.MAX_BODY
+
+
+def test_qa_agent_reads_branch_after_switch_mention_prefix(tmp_path):
+    (tmp_path / ".git").mkdir()
+    run = fake_repo_run(0)
+    qa.handle(qa_msg("@qa-agent branch: fix/refund-rounding\nasked by: meera\n\nbrief"), run=run, repo=tmp_path)
+    assert run.calls[0][3] == "fix/refund-rounding"  # live: Switch prepends the mention to a targeted body
+
+
+def test_ticket_title_from_the_request():
+    from chief.main import _subject
+    assert _subject("@chief the refunds rounding fix on fix/refund-rounding is ready for QA") == \
+        "the refunds rounding fix on fix/refund-rounding"
+    assert _subject("chief, ready for testing: coupons") == "coupons"
+    assert _subject("@chief ready for QA") == "the change"

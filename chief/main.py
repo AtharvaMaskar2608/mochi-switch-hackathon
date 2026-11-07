@@ -471,10 +471,13 @@ def qa_owner(text: str, ctx: Ctx) -> str:
     return ctx.qa
 
 
-def _title(brief: str) -> str:
-    line = next((ln for ln in brief.splitlines() if ln.strip()), "Ready for QA")
-    line = re.sub(r"^[#*\s]*(?:(?:brief|title)\s*:\s*)?|[*\s]+$", "", line, flags=re.I)
-    return line[:80] or "Ready for QA"
+def _subject(request: str) -> str:
+    """What is handed over, in the developer's own words: "the refunds rounding fix on fix/x".
+    (Live, the brief's first line was "Brief for the specialist agent (...)": a poor ticket title.)"""
+    t = re.sub(r"^\W*(?:(?:@\S+|hey|chief)[\s,:]*)+", "", request.strip(), flags=re.I)
+    t = re.sub(r"[\s,.:-]*\b(?:is |are )?(?:now )?ready for (?:qa|testing)\b[\s:,.!-]*", " ", t, flags=re.I)
+    t = writer.sanitize(" ".join(t.split()))
+    return t[:66] or "the change"
 
 
 def _ready_for_qa(msg: Msg, sender: Profile, hits, ctx: Ctx) -> list[Action]:
@@ -491,7 +494,7 @@ def _ready_for_qa(msg: Msg, sender: Profile, hits, ctx: Ctx) -> list[Action]:
     if pr := PR_RE.search(msg.body):
         lines.append(f"pr: #{pr[1]}")
     lines += [f"asked by: {sender.slug}", f"qa: {qa}"]
-    return [("file_ticket", {"title": _title(brief), "brief": "\n".join(lines) + "\n\n" + brief,
+    return [("file_ticket", {"title": f"Ready for QA: {_subject(msg.body)}", "what": _subject(msg.body), "brief": "\n".join(lines) + "\n\n" + brief,
                              "asker": sender.slug, "qa": qa, "room_id": msg.room_id, "thread_id": _root(msg)})]
 
 
@@ -517,7 +520,7 @@ def _apply_file_ticket(a: dict, client, ctx: Ctx) -> None:
                     "qa-agent may not be running", thread_id=a.get("thread_id"))
         raise
     rid = room.get("id") or room.get("room_id")
-    ctx.qa_rooms[rid] = {"qa": a["qa"], "asker": a["asker"], "title": a["title"], "ticket": t and t["number"],
+    ctx.qa_rooms[rid] = {"qa": a["qa"], "asker": a["asker"], "title": a.get("what", a["title"]), "ticket": t and t["number"],
                          "room_id": a["room_id"], "thread_id": a.get("thread_id")}
     client.target(rid, a["brief"], names=["qa-agent"])  # by name: the qa role has no holder until kickoff
     who = f"{ctx.store.profile(a['qa']).name} (QA)"

@@ -32,7 +32,8 @@ def handle(msg: Msg, run=subprocess.run, repo: Path | None = None) -> Reply:
         b = run(["bash", str(ROOT / "sample/make_shop_repo.sh"), "--local", str(repo)], capture_output=True, text=True)
         if b.returncode != 0:
             return Reply(f"QA FAILED: could not build the sample repo (exit {b.returncode})")
-    branch = _field(msg.body, "branch")
+    # Switch delivers a targeted message as "@qa-agent <body>": drop the leading mentions so line 1 is a field
+    branch = _field(re.sub(r"^(?:\s*@\S+)+[ \t]*", "", msg.body), "branch")
     if branch:
         if not BRANCH_OK.fullmatch(branch):
             return Reply("QA FAILED: that branch name is not one I will check out")
