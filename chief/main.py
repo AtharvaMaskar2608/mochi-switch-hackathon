@@ -245,7 +245,7 @@ VISIBLE = {"post", "target", "approval", "open_work_room"}
 
 def spoken_to(body: str, name: str = "chief") -> bool:
     """A dictated "Chief, ..." or "hey chief ..." has no @-mention, but it is addressed all the same."""
-    return re.match(rf"\W*(?:hey\W+)?{re.escape(name)}\b", body, re.I) is not None
+    return re.match(rf"\W*(?:hey\W+)?{re.escape(name)}(?=$|[\s,:!.?])", body, re.I) is not None
 
 
 def _handle(msg: Msg, ctx: Ctx) -> list[Action]:

@@ -230,7 +230,8 @@ def test_spoken_chief_counts_as_addressed(body):
     assert spoken_to(body)
 
 
-@pytest.mark.parametrize("body", ["mischief is afoot", "the chief said no", "chiefly refunds", "hey there chief"])
+@pytest.mark.parametrize("body", ["mischief is afoot", "the chief said no", "chiefly refunds", "hey there chief",
+                                  "chief-ops is noisy today", "chief's brief was late"])
 def test_chief_in_passing_is_not_addressed(body):
     from chief.main import spoken_to
     assert not spoken_to(body)
