@@ -205,6 +205,56 @@ def test_deploy_approval_owned_by_release_owner(ctx):
     assert (acts[0][1]["action"], acts[0][1]["owner"]) == ("deploy", "meera")
 
 
+def test_approved_deploy_opens_release_train_as_the_requester(ctx):
+    ctx.gate = gate_of(template="release-train", fits=0.9)
+    code = _code(handle(msg("deploy the refunds fix", addressed=True), ctx), ctx)  # ravi asks
+    (kind, a), = handle(msg(f"approve {code}", sender="meera"), ctx)  # meera owns the approval
+    assert kind == "open_work_room" and a["asker"] == "ravi" and a["brief"] == "brief for release-train from ravi"
+    (ctx.workflows_dir / "release-train.yaml").write_text("name: release-train\n")
+    c = FakeClient()
+    apply([(kind, a)], c, ctx)
+    assert c.log[0][2]["asker"] == "ravi" and ctx.origins["W1"]["asker"] == "ravi"  # ravi is in the room
+
+
+def test_within_the_hour_is_not_held_but_lower_urgency_is(ctx):
+    ctx.gate = gate_of(urgency=2 / 3)  # "within the hour"
+    assert [k for k, _ in handle(msg("meera checkout is slow"), ctx)] == ["none"]
+    ctx.gate = gate_of(urgency=0.59)
+    assert [k for k, _ in handle(msg("meera checkout is slow"), ctx)] == ["hold", "post"]
+
+
+@pytest.mark.parametrize("body", ["chief, where is the refunds data?", "Hey Chief where is it", "hey, chief!",
+                                  "  CHIEF: status?", "Chief"])
+def test_spoken_chief_counts_as_addressed(body):
+    from chief.main import spoken_to
+    assert spoken_to(body)
+
+
+@pytest.mark.parametrize("body", ["mischief is afoot", "the chief said no", "chiefly refunds", "hey there chief"])
+def test_chief_in_passing_is_not_addressed(body):
+    from chief.main import spoken_to
+    assert not spoken_to(body)
+
+
+def test_handle_treats_spoken_chief_as_addressed(ctx):
+    ctx.gate = gate_of(for_me=0.1, rung="offer", template="data-question", fits=0.9)
+    acts = handle(msg("Hey chief, where is the refunds data?"), ctx)
+    assert [k for k, _ in acts] == ["post"] and ctx.offers  # addressed: offered past for_me, offer kept for a yes
+    assert handle(msg("the chief said refunds are fine"), ctx) == [("none", {})]  # ambient, for_me low
+
+
+def test_intern_merges_on_exactly_the_phrase_chief_posts(ctx):
+    from pathlib import Path
+    ctx.work_rooms["W1"] = "dev"
+    _profile(ctx.store.root, "dev", "Dev", "dev")
+    code = _code(handle(msg("ship it", sender="dev", room="W1"), ctx), ctx)
+    (_, a), = handle(msg(f"approve {code}", sender="dev", room="W1"), ctx)
+    assert a["body"] == "merge approved by dev"
+    for slug in ("meera", "dev"):
+        doc = (Path(__file__).parent.parent / "agents" / f"intern-{slug}" / "CLAUDE.md").read_text()
+        assert f"Merge only when Chief posts `merge approved by {slug}`" in doc and "Never merge" not in doc
+
+
 def test_tick_from_person_ignored(ctx):
     seen = []
     ctx.on_tick = lambda kind, c: seen.append(kind) or []
@@ -468,7 +518,7 @@ def test_release_train_dry_run_after_release_owner_approves(ctx):
     code = _code(acts, ctx)
     assert "no pending" in handle(msg(f"approve {code}", sender="ravi"), ctx)[0][1]["body"]
     out = handle(msg(f"approve {code}", sender="meera"), ctx)
-    line = "would deploy v1.4.2 to staging: 3 services, 1 migrations"
+    line = "would deploy v1.4.2 to staging: 3 services, 1 migration"
     assert out == [("post", {"room_id": "W1", "body": line, "thread_id": None}),
                    ("post", {"room_id": "R", "body": line, "thread_id": "M1"})]  # posts only: nothing runs
 
@@ -487,6 +537,26 @@ def test_dry_run_line_fallbacks():
     from chief.main import dry_run_line
 
     assert dry_run_line("notes with nothing countable") == "would deploy vNEXT to staging: ? services, ? migrations"
+
+
+def test_dry_run_line_reads_release_scribe_lines_and_singularizes():
+    from chief.main import dry_run_line
+
+    notes = "Release v1.4.2\n- refunds rounding fix (#12)\nservices: 3\nmigrations: 1"
+    assert dry_run_line(notes) == "would deploy v1.4.2 to staging: 3 services, 1 migration"
+    assert dry_run_line("v2.0.0\nServices: 1\nMigrations: 0") == "would deploy v2.0.0 to staging: 1 service, 0 migrations"
+    assert dry_run_line("v2.0.1 touches 2 services and 2 migrations") == \
+        "would deploy v2.0.1 to staging: 2 services, 2 migrations"
+
+
+def test_release_scribe_is_told_to_write_the_counted_lines():
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent
+    for f in ("agents/ship/CLAUDE.md", "workflows/release-train.yaml"):
+        text = (root / f).read_text()
+        assert "services: N" in text or "services: <N>" in text, f
+        assert "migrations: M" in text or "migrations: <M>" in text, f
 
 
 def test_non_hard_ask_first_becomes_offer(ctx):

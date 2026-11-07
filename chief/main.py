@@ -47,7 +47,7 @@ LEAD_AGENT = {  # whose long reply or table in the work room is the answer; rele
 }
 FITS_MIN = 0.7
 FOR_ME_NO = 0.3
-URGENT = 0.67
+URGENT = 0.6  # "within the hour" scores 2/3: not held
 RELEASE_EVERY_S = 60
 MERGE_RE = re.compile(r"\b(merge|ship it)\b", re.I)
 DONE_RE = re.compile(r"DONE\b[\s:.!-]*")  # matched at the start of the message only
@@ -156,7 +156,7 @@ def _approved(payload: dict, ctx: Ctx) -> list[Action]:
                             "roles": [f"intern-{asker}"], "thread_id": m.thread_id})]
     if payload["action"] == "create_agent":
         return [_post(m, ctx.writer.sanitize(ctx.factory_build(m.body, ctx)))]
-    sender = ctx.store.profile(payload["owner"])
+    sender = ctx.store.profile(profile_slug(m.sender_name))  # the requester, not the approver
     return _act(m, sender, payload["template"], ctx)
 
 
@@ -185,10 +185,13 @@ def _approval(msg: Msg, owner: str, action: str, template: str | None, **extra) 
 
 def dry_run_line(notes: str) -> str:
     version = re.search(r"\bv\d+(?:\.\d+)+\b", notes)
-    services = re.search(r"(\d+)\s+services?\b", notes, re.I)
-    migrations = re.search(r"(\d+)\s+migrations?\b", notes, re.I)
+    def count(noun: str) -> str:  # "services: 3" (the release-scribe's line) or "3 services"
+        m = (re.search(rf"\b{noun}s?[ \t]*:[ \t]*(\d+)", notes, re.I)
+             or re.search(rf"(\d+)[ \t]+{noun}s?\b", notes, re.I))
+        n = m[1] if m else "?"
+        return f"{n} {noun}" + ("" if n == "1" else "s")
     return (f"would deploy {version[0] if version else 'vNEXT'} to staging: "
-            f"{services[1] if services else '?'} services, {migrations[1] if migrations else '?'} migrations")
+            f"{count('service')}, {count('migration')}")
 
 
 def _work_room_reply(msg: Msg, ctx: Ctx) -> list[Action] | None:
@@ -240,9 +243,16 @@ def profile_slug(sender_name: str) -> str:
 VISIBLE = {"post", "target", "approval", "open_work_room"}
 
 
+def spoken_to(body: str, name: str = "chief") -> bool:
+    """A dictated "Chief, ..." or "hey chief ..." has no @-mention, but it is addressed all the same."""
+    return re.match(rf"\W*(?:hey\W+)?{re.escape(name)}\b", body, re.I) is not None
+
+
 def _handle(msg: Msg, ctx: Ctx) -> list[Action]:
     if ctx.self_name in (msg.sender, msg.sender_name.lower()):
         return []  # never answer itself; timer ticks run in-process (run(): tick_loop on_fire)
+    if not msg.is_agent and not msg.addressed and spoken_to(msg.body, ctx.self_name):
+        msg = replace(msg, addressed=True)
     if msg.is_agent and msg.room_id in ctx.origins:  # Chief's own work room: the answer may be in
         acts = _work_room_reply(msg, ctx)
         if acts is not None:
