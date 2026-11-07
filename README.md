@@ -60,7 +60,7 @@ flowchart TB
 
 1. Switch streams every message in Chief's rooms (`filter=all`). Chief never answers itself, and answers another agent only when addressed.
 2. A message is **addressed** to Chief when Switch says so (an `@chief` mention), or when a person's message starts with "chief" or "hey chief" (a dictated message has no mention).
-3. Chief handles its commands itself (`!memory`, `!quiet`, `!quiet off`, `remember …`, `forget …`, `approve CODE`, `deny CODE`, `!tick <kind>`).
+3. Chief handles its commands itself (`!memory`, `!quiet`, `!quiet off`, `remember …`, `forget …`, `approve CODE`, `deny CODE`, `!tick <kind>`). Switch's Mattermost bridge takes a leading `!word` as its own command, so there address Chief and drop the `!`: `@chief tick dream`, `@chief memory`.
 4. A "yes" from the same person in the thread of Chief's offer runs what was offered (see the trust ladder).
 5. Otherwise Chief makes **one gate call** with the message, the sender's profile, the room, whether a mentioned teammate is in focus time, and the template and role lists. The exception: an addressed message that makes several requests is split by Claude into at most 3 parts, and each part gets its own gate call. If two or more parts lead to a reply, Chief first posts "On it, N jobs: …".
 6. If the message mentions a teammate who is in focus time and the urgency is below "within the hour", Chief holds it for them (this runs even for chat between people that isn't for Chief).
