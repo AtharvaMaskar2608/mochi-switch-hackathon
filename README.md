@@ -180,7 +180,7 @@ This reproduces story 1 on Switch's bundled Mattermost. The only thing you must 
 Mochi, design-agent and the cyber-security scanner are not needed. The judge path uses the bundled stand-in data agent instead of Mochi.
 
 ```bash
-git clone <this repo> chief && cd chief
+git clone https://github.com/AtharvaMaskar2608/mochi-switch-hackathon.git && cd mochi-switch-hackathon
 cp .env.example .env            # add ANTHROPIC_API_KEY (and TYPESAFE_API_KEY if you have one)
 bash scripts/up.sh              # a local Postgres already on 5432? SWITCH_DB_PORT=5434 bash scripts/up.sh
 ```
