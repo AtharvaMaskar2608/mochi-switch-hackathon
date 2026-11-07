@@ -224,8 +224,8 @@ Lean on what Switch already enforces. Interns run with `auto_mode: false`, so Sw
 Other small rules make Chief pleasant to have around:
 
 - At most 3 unprompted posts per room per hour.
-- `!quiet` silences it in a room.
-- A ping to someone in focus time that can wait (below "within the hour") is held, even if it was chat between people and not for Chief. Chief tells the asker in their thread, "Meera is heads-down until 15:00; I'll pass this on", and adds anything memory already knows. When her block ends (or on the `evening` tick), she gets one batched brief per room.
+- `@chief quiet` silences it in a room.
+- A ping to someone in focus time that can wait (below "within the hour") is held, even if it was chat between people and not for Chief. Chief tells the asker in their thread, "Meera is heads-down until 15:00; I'll pass this on", and adds anything memory already knows. When her block ends (or on the `evening` tick (`@chief tick evening`)), she gets one batched brief per room.
 
 ## Step 7: memory people can read
 
