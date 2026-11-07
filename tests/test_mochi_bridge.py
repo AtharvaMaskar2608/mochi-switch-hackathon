@@ -56,3 +56,12 @@ def test_channels_ids_match_mochi_regex():
     chans = send(c, "/internal/slack-channels", {}).json()["channels"]
     assert [x["name"] for x in chans] == ["product", "leadership"]
     assert all(re.fullmatch(r"[CG][A-Z0-9]{6,20}", x["id"]) for x in chans)
+
+
+def test_card_text_never_carries_a_live_at():
+    f, c = setup()
+    card = {"headline": "@chief look", "body": "ping @asha", "artifact": {"url": "http://m/@a"},
+            "keyNumbers": [{"label": "@x", "value": "a@b", "change": "@up"}]}
+    send(c, "/internal/deliver", {"channelId": "C0SWITCH01", "card": card})
+    (_, body), = f.posts
+    assert "@" not in body and body.count("＠") == 6

@@ -22,7 +22,7 @@ def format_card(card: dict) -> str:
         for n in card.get("keyNumbers") or []
     )
     parts = [f"🔔 {card.get('headline', '')}", card.get("body"), nums, (card.get("artifact") or {}).get("url")]
-    return "\n".join(p for p in parts if p)
+    return "\n".join(p for p in parts if p).replace("@", "＠")  # model-written: never re-address anyone
 
 
 def create_app(switch, secret: str, channel_map: dict[str, str]) -> FastAPI:
