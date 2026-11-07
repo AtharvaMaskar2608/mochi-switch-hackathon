@@ -479,6 +479,10 @@ def _title(brief: str) -> str:
 
 def _ready_for_qa(msg: Msg, sender: Profile, hits, ctx: Ctx) -> list[Action]:
     qa = qa_owner(msg.body, ctx)
+    if qa == sender.slug:  # nobody verifies their own work
+        qa = ctx.qa
+    if qa == sender.slug:
+        return [_post(msg, "needs a different person to QA this; who should test it?")]
     brief = FIXED_LINE_RE.sub("", ctx.writer.brief(msg, sender, hits, "ready-for-qa")).strip()
     # Code-extracted fields come FIRST (qa-agent takes the first `branch:`); the model's own such lines are gone.
     lines = []

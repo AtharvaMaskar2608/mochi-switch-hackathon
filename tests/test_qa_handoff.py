@@ -236,6 +236,16 @@ def test_model_brief_cannot_choose_the_branch(qctx, tmp_path):
     assert run.calls[0] == ["git", "checkout", "-q", "fix/bc-142-rounding", "--"]
 
 
+def test_asker_cannot_be_own_qa(qctx):
+    qctx.store.add("team", "team", "fact", "qa owner: payments → dev", {"room": "#eng", "date": "x", "by": "person"})
+    handed_off(qctx, sender="dev", body="chief, the payments retry fix is ready for QA")
+    assert qctx.tickets.calls[0][2].splitlines()[:2] == ["asked by: dev", "qa: priya"]  # memory said dev: default
+    qctx.tickets.calls.clear()
+    c = handed_off(qctx, sender="priya", body="chief, the refunds export fix is ready for QA")
+    assert c.log == [("post", "E", "needs a different person to QA this; who should test it?")]
+    assert qctx.tickets.calls == []
+
+
 def test_ticket_create_failure_still_hands_off(qctx):
     qctx.tickets = FakeTickets(fail={"create"})
     c = handed_off(qctx)
